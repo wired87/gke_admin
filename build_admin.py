@@ -20,8 +20,9 @@ class GKEAdmin:
         self.project_id = os.environ["GCP_PROJECT_ID"]
         self.region = kwargs.get('region', 'us-central1')
         self.repo = "qfs-repo"
-
-        self.artifact_admin=ArtifactAdmin()
+        self.domain = os.environ["CLUSTER_DOMAIN"]
+        self.cluster_port = int(os.environ["CLUSTER_PORT"])
+        self.artifact_admin = ArtifactAdmin()
 
         # RAY cluster image
         self.image_name = "qfs"
@@ -30,7 +31,7 @@ class GKEAdmin:
         self.source = kwargs.get('source', '')
         self.cluster_name = os.environ["CLUSTER_NAME"]
         self.deployment_name = kwargs.get('deployment_name', 'cluster-deployment')
-        self.container_port = kwargs.get('container_port', 8001)
+        self.container_port = kwargs.get('container_port', self.cluster_port)
         self.full_tag = None
 
     ################################### YAML
@@ -138,7 +139,7 @@ class GKEAdmin:
                 "image": image,
                 "ports": [
                     {
-                        "containerPort": 8001,
+                        "containerPort": self.cluster_port,
                         "protocol": "TCP"
                     }
                 ],
@@ -205,22 +206,22 @@ class GKEAdmin:
             "apiVersion": "networking.k8s.io/v1",
             "kind": "Ingress",
             "metadata": {
-                "name": "botworld-ingress",
+                "name": f"{self.domain}-ingress",
                 "annotations": annotations
             },
             "spec": {
                 "tls": [
                     {
-                        "hosts": ["cluster.botworld.cloud", "www.cluster.botworld.cloud"],
-                        "secretName": "botworld-tls"  # muss als Secret vorhanden sein
+                        "hosts": [f"cluster.{self.domain}", f"www.cluster.{self.domain}"],
+                        "secretName": f"{self.domain}-tls"  # muss als Secret vorhanden sein
                     }
                 ],
                 "rules": [
                     self.create_ingress_rule(
-                        host="cluster.botworld.cloud",
+                        host=f"cluster.{self.domain}",
                         path=f"/{env_id}",
                         service_name=env_id,
-                        service_port=8001
+                        service_port=self.cluster_port
                     ),
                 ]
             }
@@ -239,10 +240,11 @@ class GKEAdmin:
 
     def create_ingress_rule(
             self,
-            host="botworld.cloud",
+            host,
+            service_port,
             path="/qfs",
             service_name="qfs-service",
-            service_port=8001,
+
             path_type="Prefix"
     ):
         return {
@@ -293,10 +295,10 @@ class GKEAdmin:
 
     def create_service_cfg(
             self,
+            port,
+            target_port,
             name="qfs-service",
             app_label="qfs",
-            port=8001,
-            target_port=8001,
             service_type="LoadBalancer",
             namespace="default",
             api_version="v1",
@@ -354,8 +356,8 @@ class GKEAdmin:
                 self.expose_deployment(
                     deployment_name=struct["deployment"]["name"],
                     service_name=struct["deployment"]["name"],
-                    port=8001,
-                    target_port=8001,
+                    port=self.cluster_port,
+                    target_port=self.cluster_port,
                 )
             print("Deployment process finished.Updated env_cfg.")
             pprint.pp(env_cfg)
