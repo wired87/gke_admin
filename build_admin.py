@@ -2,30 +2,41 @@ import os
 import pprint
 import subprocess
 import time
+from tempfile import TemporaryDirectory
+from urllib import request
 
+import requests
 from kubernetes import client, config
 
-from artifact_registry.artifact_admin import ArtifactAdmin
+from ar_registry.artifact_admin import ArtifactAdmin
+from utils.file._yaml import write_yaml
 from utils.run_subprocess import exec_cmd
 
 import dotenv
 dotenv.load_dotenv()
 
 class GKEAdmin:
-    def __init__(self, **kwargs):
+    def __init__(self, name=None, repo="qfs-repo", image="qfs", cfg=None, **kwargs):
         config.load_kube_config()
         self.v1 = client.CoreV1Api()
 
         # IMAGE OPONENTS
-        self.project_id = os.environ["GCP_PROJECT_ID"]
+        self.app_name = name
+        self.cfg = cfg
+
         self.region = kwargs.get('region', 'us-central1')
-        self.repo = "qfs-repo"
+        self.repo = repo
+
+        self.project_id = os.environ["GCP_PROJECT_ID"]
         self.domain = os.environ["CLUSTER_DOMAIN"]
+        self.cluster_subdomain = os.environ["CLUSTER_NAME"]
         self.cluster_port = int(os.environ["CLUSTER_PORT"])
+
         self.artifact_admin = ArtifactAdmin()
+        self.file_store = TemporaryDirectory()
 
         # RAY cluster image
-        self.image_name = "qfs"
+        self.image = image
         self.tag = kwargs.get('tag', 'latest')
 
         self.source = kwargs.get('source', '')
@@ -42,7 +53,6 @@ class GKEAdmin:
         """
         try:
             cmd = ['kubectl', 'apply', '-f', file_path]
-
             result = exec_cmd(cmd)
             if result is not None:
                 print(f"Resource was successfully created from '{file_path}'.")
@@ -53,12 +63,14 @@ class GKEAdmin:
 
     def create_deployment_cfg(
             self,
-            env_id,
-            cfg_struct
+            app_name=None,
+            cfg_struct=None
     ):
+        if app_name is None:
+            app_name = self.app_name
         creator_struct = {
-            **self.create_pod_metadata(name=env_id),
-            "spec": self.get_spec(env_id, cfg_struct)
+            **self.create_pod_metadata(name=app_name),
+            "spec": self.get_spec(app_name, cfg_struct)
         }
         return creator_struct
 
@@ -77,8 +89,14 @@ class GKEAdmin:
     def get_spec(
             self,
             env_id,
-            cfg_struct
+            cfg_struct=None
     ):
+        if cfg_struct is None:
+            cfg_struct = self.cfg
+
+        if env_id is None:
+            env_id = self.app_name
+
         spec_struct = {
             "replicas": 1,
             "selector": {
@@ -120,6 +138,8 @@ class GKEAdmin:
             A dictionary representing the Pod's API version, kind, and metadata.
 
         """
+        if name is None:
+            name = self.app_name
         return {
             "apiVersion": "apps/v1",
             "kind": resource_kind,
@@ -130,12 +150,20 @@ class GKEAdmin:
             }
         }
 
-    def containers_section(self, env_id, cfg_struct) -> list:
-        image = self.artifact_admin.get_latest_image()
+    def containers_section(self, name, cfg_struct, image=None) -> list:
+        if image is None:
+            if self.image is None:
+                image = self.artifact_admin.get_latest_image()
+            else:
+                image = self.image
+        if name is None:
+            name = self.app_name
+
         resources = self.create_resources_spec()
+
         container_struct = [
             {
-                "name": env_id.replace("_", "-"),
+                "name": name.replace("_", "-"),
                 "image": image,
                 "ports": [
                     {
@@ -184,8 +212,11 @@ class GKEAdmin:
         pprint.pp(result)
         return result
 
-    def create_ingress_service_rule(self, env_id):
-        env_id=env_id.replace('_', '-')
+    def create_ingress_service_rule(self, app_name=None):
+        if app_name is None:
+            app_name = self.app_name
+        app_name=app_name.replace('_', '-')
+
         annotations = {
             "nginx.ingress.kubernetes.io/rewrite-target": "/",
             "nginx.ingress.kubernetes.io/proxy-body-size": "50m",
@@ -198,7 +229,7 @@ class GKEAdmin:
 
         ingress_controller = {
             **self.create_pod_metadata(
-                name=f"ingress-{env_id.replace('_', '-')}",
+                name=f"ingress-{app_name}",
                 labels={},
                 resource_kind="Ingress",
                 annotations={}
@@ -212,16 +243,14 @@ class GKEAdmin:
             "spec": {
                 "tls": [
                     {
-                        "hosts": [f"cluster.{self.domain}", f"www.cluster.{self.domain}"],
+                        "hosts": [f"{self.cluster_subdomain}.{self.domain}", f"www.{self.cluster_subdomain}.{self.domain}"],
                         "secretName": f"{self.domain}-tls"  # muss als Secret vorhanden sein
                     }
                 ],
                 "rules": [
                     self.create_ingress_rule(
-                        host=f"cluster.{self.domain}",
-                        path=f"/{env_id}",
-                        service_name=env_id,
-                        service_port=self.cluster_port
+                        path=f"/{app_name}",
+                        name=app_name,
                     ),
                 ]
             }
@@ -235,20 +264,21 @@ class GKEAdmin:
             "jsonpath={range .items[*]}{.metadata.namespace}:{.metadata.name}{\"\\n\"}{end}"
         ]
         result = exec_cmd(cmd)
-        return result.strip()
+        return result
 
 
     def create_ingress_rule(
             self,
-            host,
-            service_port,
-            path="/qfs",
-            service_name="qfs-service",
-
+            name=None,
+            path=None,
             path_type="Prefix"
-    ):
+):
+        if name is None:
+            name = self.app_name
+        if path is None:
+            path = f"/{name}"
         return {
-                "host": host,
+                "host": f"{self.cluster_subdomain}.{self.domain}",
                 "http": {
                     "paths": [
                         {
@@ -256,9 +286,9 @@ class GKEAdmin:
                             "pathType": path_type,
                             "backend": {
                                 "service": {
-                                    "name": service_name,
+                                    "name": name,
                                     "port": {
-                                        "number": service_port
+                                        "number": self.cluster_port
                                     }
                                 }
                             }
@@ -271,39 +301,32 @@ class GKEAdmin:
 
 
 
-    def create_resources_spec(
-            self,
-            requests_cpu: str = "4",
-            requests_memory: str = "16Gi",
-            limits_cpu: str = "16",
-            limits_memory: str = "25Gi"
-    ):
+    def create_resources_spec(self):
         """
         Erstellt das Python-Wörterbuch für die Ressourcen-Definition
         eines Containers in einem Kubernetes-Manifest.
         """
         return {
             "requests": {
-                "cpu": requests_cpu,
-                "memory": requests_memory
+                "cpu": self.cfg["resources"]["cpu"],
+                "memory": self.cfg["resources"]["mem"]
             },
             "limits": {
-                "cpu": limits_cpu,
-                "memory": limits_memory
+                "cpu": self.cfg["resources"]["cpu_limit"],
+                "memory": self.cfg["resources"]["mem_limit"]
             }
         }
 
     def create_service_cfg(
             self,
-            port,
-            target_port,
-            name="qfs-service",
-            app_label="qfs",
             service_type="LoadBalancer",
             namespace="default",
             api_version="v1",
-            kind="Service"
+            kind="Service",
+            name=None
     ):
+        if name is None:
+            name = self.app_name
         return {
             "apiVersion": api_version,
             "kind": kind,
@@ -313,12 +336,12 @@ class GKEAdmin:
             },
             "spec": {
                 "selector": {
-                    "app": app_label
+                    "app": name
                 },
                 "ports": [
                     {
-                        "port": port,
-                        "targetPort": target_port
+                        "port": self.container_port,
+                        "targetPort": self.container_port
                     }
                 ],
                 "type": service_type,
@@ -743,6 +766,53 @@ class GKEAdmin:
             pod_lines = result.split('\n')
             pod_names = [line.split()[0] for line in pod_lines if line]
             return pod_names
+
+
+    def build_image(self, args: list[str]):
+        """Run a command (list args) and stream output live."""
+        process = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            shell=os.name == "nt",
+        )
+        for line in process.stdout:
+            print(line, end="")
+
+        process.wait()
+        if process.returncode != 0:
+            raise RuntimeError(f"Command failed with code {process.returncode}")
+        return process.returncode
+
+    def create_app_process(self, app_name="app_name"):
+        needed = {
+            "Service": self.create_service_cfg,
+            "Deployment": self.create_deployment_cfg,
+            "Ingress": self.create_ingress_service_rule,
+        }
+
+        for resource, creator in needed.items():
+            path = os.path.join(self.file_store.name, f"{resource}_{app_name}.yaml")
+            content = creator()
+            write_yaml(
+                content=content,
+                dest=path
+            )
+
+        status = self.check_ingress_controller()
+
+        # INGRESS CONTROLLER
+        if not status["installed"]:
+            self.create_ingress_controller()
+
+        for file in os.listdir(self.file_store.name):
+            path = os.path.join(self.file_store.name, file)
+            self.create_resource_from_yaml(
+                file_path=path
+            )
+        print("Service created")
+
 
 if __name__ == "__main__":
     admin = GKEAdmin()
