@@ -1,0 +1,2 @@
+# get ingress controller
+kubectl get svc -n ingress-nginx
