@@ -1,3 +1,4 @@
+import os
 import pprint
 import subprocess
 import time
@@ -7,6 +8,8 @@ from kubernetes import client, config
 from artifact_registry.artifact_admin import ArtifactAdmin
 from utils.run_subprocess import exec_cmd
 
+import dotenv
+dotenv.load_dotenv()
 
 class GKEAdmin:
     def __init__(self, **kwargs):
@@ -14,7 +17,7 @@ class GKEAdmin:
         self.v1 = client.CoreV1Api()
 
         # IMAGE OPONENTS
-        self.project_id = kwargs.get('project_id', 'aixr-401704')
+        self.project_id = os.environ["GCP_PROJECT_ID"]
         self.region = kwargs.get('region', 'us-central1')
         self.repo = "qfs-repo"
 
@@ -25,7 +28,7 @@ class GKEAdmin:
         self.tag = kwargs.get('tag', 'latest')
 
         self.source = kwargs.get('source', '')
-        self.cluster_name = kwargs.get('cluster_name', 'autopilot-cluster-1')
+        self.cluster_name = os.environ["CLUSTER_NAME"]
         self.deployment_name = kwargs.get('deployment_name', 'cluster-deployment')
         self.container_port = kwargs.get('container_port', 8001)
         self.full_tag = None
@@ -738,8 +741,6 @@ class GKEAdmin:
             pod_lines = result.split('\n')
             pod_names = [line.split()[0] for line in pod_lines if line]
             return pod_names
-#us-central1-docker.pkg.dev/aixr-401704/qfs-repo/qfs:latest
-#us-central1-docker.pkg.dev/aixr-401704/qfs-repo/qfs:latest
 
 if __name__ == "__main__":
     admin = GKEAdmin()
