@@ -2,7 +2,7 @@ from django.views import View
 from django.http import JsonResponse
 import subprocess
 
-from gke.build_admin import GKEAdmin
+from gke_admin.build_admin import GKEAdmin
 
 
 # Importiere deine GKEAdmin-Klasse

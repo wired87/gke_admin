@@ -3,12 +3,10 @@ import pprint
 import subprocess
 import time
 from tempfile import TemporaryDirectory
-from urllib import request
 
-import requests
 from kubernetes import client, config
 
-from ar_registry.artifact_admin import ArtifactAdmin
+from artifact_registry.artifact_admin import ArtifactAdmin
 from utils.file._yaml import write_yaml
 from utils.run_subprocess import exec_cmd
 
@@ -16,21 +14,21 @@ import dotenv
 dotenv.load_dotenv()
 
 class GKEAdmin:
-    def __init__(self, name=None, repo="qfs-repo", image="qfs", cfg=None, **kwargs):
+    def __init__(self, gcp_project_id, cluster_domain, cluster_name, cluster_port, app_name=None, repo="qfs-repo", image="qfs", cfg=None, **kwargs):
         config.load_kube_config()
         self.v1 = client.CoreV1Api()
 
         # IMAGE OPONENTS
-        self.app_name = name
+        self.app_name = app_name
         self.cfg = cfg
 
         self.region = kwargs.get('region', 'us-central1')
         self.repo = repo
 
-        self.project_id = os.environ["GCP_PROJECT_ID"]
-        self.domain = os.environ["CLUSTER_DOMAIN"]
-        self.cluster_subdomain = os.environ["CLUSTER_NAME"]
-        self.cluster_port = int(os.environ["CLUSTER_PORT"])
+        self.project_id = gcp_project_id
+        self.domain = cluster_domain
+        self.cluster_subdomain = cluster_name
+        self.cluster_port = int(cluster_port)
 
         self.artifact_admin = ArtifactAdmin()
         self.file_store = TemporaryDirectory()
@@ -41,8 +39,6 @@ class GKEAdmin:
 
         self.source = kwargs.get('source', '')
         self.cluster_name = os.environ["CLUSTER_NAME"]
-        self.deployment_name = kwargs.get('deployment_name', 'cluster-deployment')
-        self.container_port = kwargs.get('container_port', self.cluster_port)
         self.full_tag = None
 
     ################################### YAML
@@ -300,6 +296,15 @@ class GKEAdmin:
 
 
 
+    def check_create_ingress_controller(self):
+        status = self.check_ingress_controller()
+
+        # INGRESS CONTROLLER
+        if not status["installed"]:
+            self.create_ingress_controller()
+
+
+
 
     def create_resources_spec(self):
         """
@@ -319,7 +324,7 @@ class GKEAdmin:
 
     def create_service_cfg(
             self,
-            service_type="LoadBalancer",
+            service_type="IPConfig",  # "LoadBalancer",
             namespace="default",
             api_version="v1",
             kind="Service",

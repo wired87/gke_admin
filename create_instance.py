@@ -39,7 +39,7 @@ def create_instance():
     "notificationConfig": {
       "pubsub": {}
     },
-    "initialClusterVersion": "1.31.5-gke.1233000",
+    "initialClusterVersion": "1.31.5-gke_admin.1233000",
     "location": "us-central1",
     "autopilot": {
       "enabled": True
