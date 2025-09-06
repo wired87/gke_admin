@@ -1,20 +1,24 @@
-
 import dotenv
+from kubernetes import client, config
+
 dotenv.load_dotenv()
+config.load_kube_config()
 
-init_in_local_project =f"""
+KUB_CLIENT = client.CoreV1Api()
 
+init_in_local_project = f"""
 gke-gcloud-auth-plugin --version
-
 """
 
-INSTALL_AUTH_PLUGIN="""gcloud
+INSTALL_AUTH_PLUGIN="""
+gcloud
 components
 install
 gke - gcloud - auth - plugin"""
 
 
 CREATE_PRIVATE_KEY = None
+
 def get_priv_key(PRIVATE_KEY_FILE):
     return f"""
 PRIVATE_KEY_FILE="/tmp/ec_private.pem"

@@ -1,12 +1,12 @@
+import os
+
 from django.views import View
 from django.http import JsonResponse
 import subprocess
 
 from gke_admin.build_admin import GKEAdmin
 
-
 # Importiere deine GKEAdmin-Klasse
-
 
 class DeletePodView(View):
     """
@@ -15,12 +15,19 @@ class DeletePodView(View):
 
     def delete(self, request, *args, **kwargs):
         pod_names: list = kwargs.get('pod_names')
-        cluster_name = kwargs.get('cluster_name', "autopilot-cluster-1")
+        user_id: list = kwargs.get('user_id')
+        cluster_name = kwargs.get('cluster_name')
 
         if not pod_names or not isinstance(pod_names, list) or not len(pod_names):
             return JsonResponse({'error': 'Pod name not provided'}, status=400)
 
-        admin = GKEAdmin()
+        admin = GKEAdmin(
+            user_id=user_id,
+            gcp_project_id=os.environ["GCP_PROJECT_ID"],
+            cluster_domain=os.environ["CLUSTER_DOMAIN"],
+            cluster_name=os.environ["GKE_SIM_CLUSTER_NAME"],
+            cluster_port=os.environ["CLUSTER_PORT"],
+        )
 
         try:
             # Authentifizierung beim Cluster

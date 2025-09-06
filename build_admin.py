@@ -7,14 +7,21 @@ from tempfile import TemporaryDirectory
 from kubernetes import client, config
 
 from artifact_registry.artifact_admin import ArtifactAdmin
+from gke_admin import KUB_CLIENT
+from gke_admin.cluster_admin import ClusterManager
 from utils.file._yaml import write_yaml
 from utils.run_subprocess import exec_cmd
 
 import dotenv
 dotenv.load_dotenv()
 
-class GKEAdmin:
-    def __init__(self, gcp_project_id, cluster_domain, cluster_name, cluster_port, app_name=None, repo="qfs-repo", image="qfs", cfg=None, **kwargs):
+class GKEAdmin(ClusterManager):
+    def __init__(self, gcp_project_id, cluster_domain, cluster_name, cluster_port,
+                 app_name=None, repo="qfs-repo", image="qfs", cfg=None, **kwargs):
+        self.region = 'us-central1'
+
+        ClusterManager.__init__(self, cluster_name, self.region, gcp_project_id)
+
         config.load_kube_config()
         self.v1 = client.CoreV1Api()
 
@@ -22,8 +29,15 @@ class GKEAdmin:
         self.app_name = app_name
         self.cfg = cfg
 
-        self.region = kwargs.get('region', 'us-central1')
         self.repo = repo
+
+        self.cluster_manager = ClusterManager(
+            cluster_name=cluster_name,
+            region=self.region,
+            project_id=gcp_project_id
+        )
+        # Check create cluster
+        self.cluster_manager()
 
         self.project_id = gcp_project_id
         self.domain = cluster_domain
@@ -35,10 +49,9 @@ class GKEAdmin:
 
         # RAY cluster image
         self.image = image
-        self.tag = kwargs.get('tag', 'latest')
+        self.tag = "latest"
 
-        self.source = kwargs.get('source', '')
-        self.cluster_name = os.environ["CLUSTER_NAME"]
+        self.cluster_name = cluster_name
         self.full_tag = None
 
     ################################### YAML
@@ -62,13 +75,21 @@ class GKEAdmin:
             app_name=None,
             cfg_struct=None
     ):
-        if app_name is None:
-            app_name = self.app_name
-        creator_struct = {
-            **self.create_pod_metadata(name=app_name),
-            "spec": self.get_spec(app_name, cfg_struct)
-        }
-        return creator_struct
+        try:
+            if app_name is None:
+                app_name = self.app_name
+
+            print("cfg struct create_deployment_cfg")
+            pprint.pp(cfg_struct)
+
+            creator_struct = {
+                **self.create_pod_metadata(name=app_name),
+                "spec": self.get_spec(app_name, world_cfg_item=cfg_struct)
+            }
+
+            return creator_struct
+        except Exception as e:
+            print(f"Error creacreate_deployment_cfgte_service_cfg: {e}")
 
 
     def create_ingress_controller(self):
@@ -85,13 +106,17 @@ class GKEAdmin:
     def get_spec(
             self,
             env_id,
-            cfg_struct=None
+            world_cfg_item=None
     ):
-        if cfg_struct is None:
-            cfg_struct = self.cfg
+        if world_cfg_item is None:
+            world_cfg_item = self.cfg
 
         if env_id is None:
             env_id = self.app_name
+
+        container_spec = self.containers_section(env_id, world_cfg_item)
+        print("cfg struct get_spec")
+        pprint.pp(world_cfg_item)
 
         spec_struct = {
             "replicas": 1,
@@ -108,11 +133,11 @@ class GKEAdmin:
 
                 },
                 "spec": {
-                    "containers": [],
+                    "containers": container_spec,
                 }
             },
         }
-        spec_struct["template"]["spec"]["containers"] = self.containers_section(env_id, cfg_struct)
+
         return spec_struct
 
 
@@ -134,6 +159,7 @@ class GKEAdmin:
             A dictionary representing the Pod's API version, kind, and metadata.
 
         """
+        print("create_pod_metadata")
         if name is None:
             name = self.app_name
         return {
@@ -146,16 +172,26 @@ class GKEAdmin:
             }
         }
 
-    def containers_section(self, name, cfg_struct, image=None) -> list:
-        if image is None:
-            if self.image is None:
-                image = self.artifact_admin.get_latest_image()
-            else:
-                image = self.image
+    def containers_section(
+            self,
+            name,
+            world_cfg_item,
+            image=None
+    ) -> list:
+        print("Set container section")
+        #if image is None:
+        #if self.image is None:
+        image = self.artifact_admin.get_latest_image()
+        """
+        else:
+            image = self.image
+        """
         if name is None:
             name = self.app_name
 
-        resources = self.create_resources_spec()
+        resources = self.create_resources_spec(
+            world_cfg_item
+        )
 
         container_struct = [
             {
@@ -167,7 +203,7 @@ class GKEAdmin:
                         "protocol": "TCP"
                     }
                 ],
-                "env": cfg_struct["env"],
+                "env": world_cfg_item["env"],
                 "resources": resources
             }
         ]
@@ -208,7 +244,10 @@ class GKEAdmin:
         pprint.pp(result)
         return result
 
-    def create_ingress_service_rule(self, app_name=None):
+    def create_ingress_service_rule(
+            self,
+            app_name=None
+    ):
         if app_name is None:
             app_name = self.app_name
         app_name=app_name.replace('_', '-')
@@ -251,7 +290,7 @@ class GKEAdmin:
                 ]
             }
         }
-        print("Ingress controller created")
+        print("Ingress rule spec created")
         return ingress_controller
 
     def get_nginx_controller(self):
@@ -294,66 +333,149 @@ class GKEAdmin:
             }
 
 
-
-
     def check_create_ingress_controller(self):
+        print("Check for ingress controlelr")
         status = self.check_ingress_controller()
 
         # INGRESS CONTROLLER
         if not status["installed"]:
+            print("Install ingress controlelr")
             self.create_ingress_controller()
+            return
+        print("Ingress already created ingress controlelr")
 
 
 
-
-    def create_resources_spec(self):
+    def create_resources_spec(self, world_cfg):
         """
         Erstellt das Python-Wörterbuch für die Ressourcen-Definition
         eines Containers in einem Kubernetes-Manifest.
         """
         return {
             "requests": {
-                "cpu": self.cfg["resources"]["cpu"],
-                "memory": self.cfg["resources"]["mem"]
+                "cpu": world_cfg["resources"]["cpu"],
+                "memory": world_cfg["resources"]["mem"]
             },
             "limits": {
-                "cpu": self.cfg["resources"]["cpu_limit"],
-                "memory": self.cfg["resources"]["mem_limit"]
+                "cpu": world_cfg["resources"]["cpu_limit"],
+                "memory": world_cfg["resources"]["mem_limit"]
             }
         }
 
     def create_service_cfg(
             self,
-            service_type="IPConfig",  # "LoadBalancer",
+            service_type="ClusterIP",  # "LoadBalancer",
             namespace="default",
             api_version="v1",
             kind="Service",
             name=None
     ):
-        if name is None:
-            name = self.app_name
-        return {
-            "apiVersion": api_version,
-            "kind": kind,
-            "metadata": {
-                "name": name,
-                "namespace": namespace,
-            },
-            "spec": {
-                "selector": {
-                    "app": name
+        try:
+            if name is None:
+                name = self.app_name
+            return {
+                "apiVersion": api_version,
+                "kind": kind,
+                "metadata": {
+                    "name": name,
+                    "namespace": namespace,
                 },
-                "ports": [
-                    {
-                        "port": self.container_port,
-                        "targetPort": self.container_port
-                    }
-                ],
-                "type": service_type,
+                "spec": {
+                    "selector": {
+                        "app": name
+                    },
+                    "ports": [
+                        {
+                            "port": self.cluster_port,
+                            "targetPort": self.cluster_port
+                        }
+                    ],
+                    "type": service_type,
+                }
             }
-        }
+        except Exception as e:
+            print(f"Error create_service_cfg: {e}")
 
     ########### CMD ##########################
+
+    def get_pod_info(self, pod_name, namespace):
+        try:
+            pod_details = KUB_CLIENT.read_namespaced_pod(
+                name=pod_name,
+                namespace=namespace,
+            )
+            print("Pod details successfully retrieved:")
+            print(pod_details.to_dict())
+            return pod_details.to_dict()
+        except client.ApiException as e:
+            print(f"Error retrieving pod details: {e}")
+
+
+    def await_pod_state(self, env_ids:list):
+        """
+        Waits in a loop until all pods in a given namespace are in the 'Running' state.
+
+        Args:
+            v1_api: An instance of the Kubernetes CoreV1Api.
+            namespace (str): The namespace to check for pods. Defaults to "default".
+
+        Returns:
+            bool: True when all pods are running.
+        """
+        print(f"Waiting for all pods to be 'Running'...")
+
+        converted_env_ids = [
+            env_id.replace("_", "-")
+            for env_id in env_ids
+        ]
+
+        while True:
+            try:
+
+                # List all pods in the specified namespace
+                pod_list = KUB_CLIENT.list_pod_for_all_namespaces()
+                all_running = True
+
+                # Check the status of each pod
+                for pod in pod_list.items:
+                    name = pod.metadata.name
+
+                    for env_id in converted_env_ids:
+                        if name == env_id or name.startswith(env_id) or env_id in name:
+                            status = pod.status.phase
+                            namespace = pod.metadata.namespace
+
+                            self.get_pod_info(
+                                pod_name=name,
+                                namespace=namespace
+                            )
+
+                            if status != "Running":
+                                all_running = False
+                                print(f"Pod '{name}' is in state '{status}'. Waiting...")
+                                break  # Break the inner loop to re-check all pods
+
+                if all_running:
+                    print("All pods are now 'Running'.")
+                    return True
+
+                # Wait for a few seconds before checking again
+                time.sleep(2)
+
+            except client.ApiException as e:
+                print(f"Error checking pod status: {e}")
+                return False
+            except Exception as e:
+                print(f"An unexpected error occurred: {e}")
+                return False
+
+
+
+
+
+
+
+
 
     def build_secrets(self, env_dict: dict) -> list:
         # SET SECRETS
@@ -477,7 +599,7 @@ class GKEAdmin:
         pod = v1.read_namespaced_pod(name=pod_name, namespace=namespace)
         return pod.status.pod_ip
 
-    def authenticate_cluster(self, cluster_name="autopilot-cluster-1"):
+    def authenticate_cluster(self, cluster_name="sims"):
         auth_command = f"gcloud container clusters get-credentials {cluster_name} --region us-central1 --project aixr-401704"
         exec_cmd(auth_command)
         print("Authenticated")
@@ -820,6 +942,11 @@ class GKEAdmin:
 
 
 if __name__ == "__main__":
-    admin = GKEAdmin()
+    admin = GKEAdmin(
+        gcp_project_id=os.environ["GCP_PROJECT_ID"],
+        cluster_domain=os.environ["CLUSTER_DOMAIN"],
+        cluster_name=os.environ["GKE_SIM_CLUSTER_NAME"],
+        cluster_port=os.environ["CLUSTER_PORT"],
+    )
     #admin.delelte_pods(all=True)
     admin.cleanup()

@@ -26,7 +26,13 @@ class Connector:
 
         self.utils = Utils()
         self.connection_manager = ConnectionManager()
-        self.gke_admin = GKEAdmin()
+        self.gke_admin = GKEAdmin(
+            user_id=user_id,
+            gcp_project_id=os.environ["GCP_PROJECT_ID"],
+            cluster_domain=os.environ["CLUSTER_DOMAIN"],
+            cluster_name=os.environ["GKE_SIM_CLUSTER_NAME"],
+            cluster_port=os.environ["CLUSTER_PORT"],
+        )
         self.db_manager = FirebaseRTDBManager(
             database_url=self.instance,
         )
