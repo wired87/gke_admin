@@ -54,9 +54,7 @@ class Connector:
             cluster_port=os.environ["CLUSTER_PORT"],
         )
 
-        self.db_manager = FirebaseRTDBManager(
-            database_url=self.instance,
-        )
+        self.db_manager = FirebaseRTDBManager()
 
     async def connect_all_pods_process(self) -> list:
         print("Connection request process started")

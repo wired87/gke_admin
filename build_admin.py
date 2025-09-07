@@ -3,7 +3,6 @@ import pprint
 import subprocess
 import time
 from tempfile import TemporaryDirectory
-from kubernetes import client
 
 from kubernetes import client, config
 
