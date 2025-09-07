@@ -4,7 +4,7 @@ import os
 from utils.run_subprocess import exec_cmd
 import dotenv
 dotenv.load_dotenv()
-#gcloud container clusters create SIMS --project aixr-401704 --region us-central1 --enable-autoscaling --num-nodes 1 --min-nodes 1 --max-nodes 5 --async --machine-type e2-highcpu-4
+
 class ClusterManager:
     """
     Manages the lifecycle of a GKE cluster.
@@ -83,7 +83,9 @@ class ClusterManager:
     def create_cluster(self):
         # Define the command to create the cluster
         create_cmd = [
-            "gcloud", "container", "clusters", "create-auto", self.cluster_name,
+            "gcloud", "container",
+            "clusters",
+            "create-auto", self.cluster_name,
             "--project", self.project_id,
             "--region", self.region,
             "--release-channel=regular",

@@ -1,13 +1,10 @@
-import asyncio
 import os
-import threading
 import time
 
 from fb_core.real_time_database import FirebaseRTDBManager
 from gke_admin.build_admin import GKEAdmin
 from utils.dj_websocket.handler import ConnectionManager
 from utils.utils import Utils
-
 
 class Connector:
     """
@@ -52,6 +49,7 @@ class Connector:
             cluster_domain=os.environ["CLUSTER_DOMAIN"],
             cluster_name=os.environ["GKE_SIM_CLUSTER_NAME"],
             cluster_port=os.environ["CLUSTER_PORT"],
+            cluster_subdomain=os.environ["CLUSTER_SUB_DOMAIN"],
         )
 
         self.db_manager = FirebaseRTDBManager()
@@ -71,7 +69,7 @@ class Connector:
                                 pod_name
                             )
                         # Small delay between iters
-                        time.sleep(1)
+                        time.sleep(5)
                         index += 1
                         print(f"{len(self.all_authenticated)}/{len(self.pod_names)} pods connected")
                 else:
@@ -87,29 +85,6 @@ class Connector:
             print(f"Error: {e}")
         print("Finished Connection request process")
 
-    def start_connection_thread(self):
-        # FB Upsert thread
-        print("Create Con thread")
-
-        def _connect():
-            missing_pods: list = asyncio.run(
-                self.connect_all_pods_process()
-            )
-            if len(missing_pods):
-                # todo error intervention
-                pass
-            else:
-                pass
-
-        self.con_thread = threading.Thread(
-            target=_connect,
-            name="POD_INIT_CONNECTION",
-            daemon=True  # Optional: Der Thread wird beendet, wenn das Hauptprogramm endet
-        )
-
-        # Start Thread
-        self.con_thread.start()
-        print("Connect to Pods thread started")
 
     async def connect_to_pod(self, pod_name):
         """
@@ -143,3 +118,34 @@ class Connector:
         except Exception as e:
             print(f"Error fetching: {e}")
         return False
+
+
+
+"""
+
+    def start_connection_thread(self):
+        # FB Upsert thread
+        print("Create Con thread")
+
+        def _connect():
+            missing_pods: list = asyncio.run(
+                self.connect_all_pods_process()
+            )
+            if len(missing_pods):
+                # todo error intervention
+                pass
+            else:
+                pass
+
+        self.con_thread = threading.Thread(
+            target=_connect,
+            name="POD_INIT_CONNECTION",
+            daemon=True  # Optional: Der Thread wird beendet, wenn das Hauptprogramm endet
+        )
+
+        # Start Thread
+        self.con_thread.start()
+        print("Connect to Pods thread started")
+
+
+"""

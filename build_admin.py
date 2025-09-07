@@ -16,8 +16,18 @@ dotenv.load_dotenv()
 
 class GKEAdmin(ClusterManager):
     def __init__(
-            self, gcp_project_id, cluster_domain, cluster_name, cluster_port,
-            app_name=None, repo="qfs-repo", image="qfs", cfg=None, **kwargs):
+            self, 
+            gcp_project_id, 
+            cluster_domain, 
+            cluster_name, 
+            cluster_port, 
+            cluster_subdomain,
+            app_name=None, 
+            repo="qfs-repo", 
+            image="qfs", 
+            cfg=None, 
+            **kwargs
+    ):
 
         self.region = 'us-central1'
         self.cluster_name = cluster_name
@@ -45,7 +55,7 @@ class GKEAdmin(ClusterManager):
 
         self.project_id = gcp_project_id
         self.domain = cluster_domain
-        self.cluster_subdomain = cluster_name
+        self.cluster_subdomain = cluster_subdomain
         self.cluster_port = int(cluster_port)
 
         self.artifact_admin = ArtifactAdmin()
@@ -282,8 +292,11 @@ class GKEAdmin(ClusterManager):
             "spec": {
                 "tls": [
                     {
-                        "hosts": [f"{self.cluster_subdomain}.{self.domain}", f"www.{self.cluster_subdomain}.{self.domain}"],
-                        "secretName": f"{self.domain}-tls"  # muss als Secret vorhanden sein
+                        "hosts": [
+                            f"{self.cluster_subdomain}.{self.domain}",
+                            f"www.{self.cluster_subdomain}.{self.domain}"
+                        ],
+                        #"secretName": f"{self.domain}-tls"  # muss als Secret vorhanden sein
                     }
                 ],
                 "rules": [
@@ -937,6 +950,7 @@ if __name__ == "__main__":
         cluster_domain=os.environ["CLUSTER_DOMAIN"],
         cluster_name=os.environ["GKE_SIM_CLUSTER_NAME"],
         cluster_port=os.environ["CLUSTER_PORT"],
+        cluster_subdomain=os.environ["CLUSTER_SUB_DOMAIN"],
     )
     #admin.delelte_pods(all=True)
     admin.cleanup()
