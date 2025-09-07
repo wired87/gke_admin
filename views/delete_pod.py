@@ -31,9 +31,7 @@ class DeletePodView(View):
 
         try:
             # Authentifizierung beim Cluster
-            admin.authenticate_cluster(
-                cluster_name
-            )
+            admin.authenticate_cluster()
 
             admin.delelte_pods(pod_names)
 

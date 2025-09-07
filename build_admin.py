@@ -16,14 +16,18 @@ import dotenv
 dotenv.load_dotenv()
 
 class GKEAdmin(ClusterManager):
-    def __init__(self, gcp_project_id, cluster_domain, cluster_name, cluster_port,
-                 app_name=None, repo="qfs-repo", image="qfs", cfg=None, **kwargs):
+    def __init__(
+            self, gcp_project_id, cluster_domain, cluster_name, cluster_port,
+            app_name=None, repo="qfs-repo", image="qfs", cfg=None, **kwargs):
+
         self.region = 'us-central1'
+        self.cluster_name = cluster_name
 
         ClusterManager.__init__(self, cluster_name, self.region, gcp_project_id)
 
         config.load_kube_config()
         self.v1 = client.CoreV1Api()
+        self.authenticate_cluster()
 
         # IMAGE OPONENTS
         self.app_name = app_name
@@ -51,7 +55,6 @@ class GKEAdmin(ClusterManager):
         self.image = image
         self.tag = "latest"
 
-        self.cluster_name = cluster_name
         self.full_tag = None
 
     ################################### YAML
@@ -63,6 +66,7 @@ class GKEAdmin(ClusterManager):
         try:
             cmd = ['kubectl', 'apply', '-f', file_path]
             result = exec_cmd(cmd)
+
             if result is not None:
                 print(f"Resource was successfully created from '{file_path}'.")
             else:
@@ -333,7 +337,7 @@ class GKEAdmin(ClusterManager):
             }
 
 
-    def check_create_ingress_controller(self):
+    def check_create_ingress_ctrl(self):
         print("Check for ingress controlelr")
         status = self.check_ingress_controller()
 
@@ -422,19 +426,19 @@ class GKEAdmin(ClusterManager):
         Returns:
             bool: True when all pods are running.
         """
-        print(f"Waiting for all pods to be 'Running'...")
+        print(f"Waiting for pods {env_ids} to be 'Running'...")
 
         converted_env_ids = [
             env_id.replace("_", "-")
             for env_id in env_ids
         ]
 
-        while True:
-            try:
+        pod_list = KUB_CLIENT.list_pod_for_all_namespaces()
+        active = []
 
+        while len(converted_env_ids) < len(active):
+            try:
                 # List all pods in the specified namespace
-                pod_list = KUB_CLIENT.list_pod_for_all_namespaces()
-                all_running = True
 
                 # Check the status of each pod
                 for pod in pod_list.items:
@@ -443,32 +447,21 @@ class GKEAdmin(ClusterManager):
                     for env_id in converted_env_ids:
                         if name == env_id or name.startswith(env_id) or env_id in name:
                             status = pod.status.phase
-                            namespace = pod.metadata.namespace
-
-                            self.get_pod_info(
-                                pod_name=name,
-                                namespace=namespace
-                            )
-
-                            if status != "Running":
-                                all_running = False
+                            print("Pod State:", status)
+                            #namespace = pod.metadata.namespace
+                            if status == "Running":
+                                active.append(name)
                                 print(f"Pod '{name}' is in state '{status}'. Waiting...")
-                                break  # Break the inner loop to re-check all pods
-
-                if all_running:
-                    print("All pods are now 'Running'.")
-                    return True
 
                 # Wait for a few seconds before checking again
                 time.sleep(2)
 
             except client.ApiException as e:
                 print(f"Error checking pod status: {e}")
-                return False
             except Exception as e:
                 print(f"An unexpected error occurred: {e}")
-                return False
-
+        print("All created pods are Running")
+        return active
 
 
 
@@ -599,26 +592,22 @@ class GKEAdmin(ClusterManager):
         pod = v1.read_namespaced_pod(name=pod_name, namespace=namespace)
         return pod.status.pod_ip
 
-    def authenticate_cluster(self, cluster_name="sims"):
-        auth_command = f"gcloud container clusters get-credentials {cluster_name} --region us-central1 --project aixr-401704"
+    def authenticate_cluster(self):
+        auth_command = f"gcloud container clusters get-credentials {self.cluster_name} --region us-central1 --project aixr-401704"
         exec_cmd(auth_command)
         print("Authenticated")
 
 
-
-
-
-
-    def get_pod_names(self, env_cfg):
-        changed_pod_identifiers = {}
-        for env_id, creation_cmd in env_cfg.items():
+    def get_pod_names(self, world_cfgs):
+        pod_identifiers = {}
+        for env_id, creation_cmd in world_cfgs.items():
             all_pods = self.get_pods()
             if all_pods is not None:
                 for pod in list(all_pods):
-                    if pod.startswith(pod) and env_id not in changed_pod_identifiers:
-                        env_cfg[env_id]["deployment"]["pod_name"] = pod
-        print(f"envcfg updated with pod names: {env_cfg}")
-        return env_cfg
+                    if pod.startswith(pod) and env_id not in pod_identifiers:
+                        world_cfgs[env_id]["pod_name"] = pod
+        print(f"envcfg updated with pod names: {world_cfgs}")
+        return world_cfgs
 
 
 
@@ -939,7 +928,6 @@ class GKEAdmin(ClusterManager):
                 file_path=path
             )
         print("Service created")
-
 
 if __name__ == "__main__":
     admin = GKEAdmin(

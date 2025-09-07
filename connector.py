@@ -14,18 +14,38 @@ class Connector:
     Connects to spec. services in cluster
     """
 
-    def __init__(self, env_cfg, user_id, cluster_root):
+    def __init__(
+            self,
+            pod_names,
+            user_id,
+            cluster_root,
+            gcp_project_id,
+            cluster_domain,
+            cluster_name,
+            cluster_port,
+            sub_domain
+    ):
         self.ready_sessions = []
+        self.all_authenticated = []
 
-        self.env_cfg = env_cfg
         self.user_id = user_id
+        self.pod_names:list = pod_names
 
         self.cluster_root = cluster_root
-
         self.instance = os.environ.get("FIREBASE_RTDB")
+
+
+        self.project_id = gcp_project_id
+
+        self.sub_domain = sub_domain
+        self.domain = cluster_domain
+        self.url = f"https://{self.sub_domain}.{self.domain}"
+        self.cluster_subdomain = cluster_name
+        self.cluster_port = int(cluster_port)
 
         self.utils = Utils()
         self.connection_manager = ConnectionManager()
+
         self.gke_admin = GKEAdmin(
             user_id=user_id,
             gcp_project_id=os.environ["GCP_PROJECT_ID"],
@@ -33,68 +53,33 @@ class Connector:
             cluster_name=os.environ["GKE_SIM_CLUSTER_NAME"],
             cluster_port=os.environ["CLUSTER_PORT"],
         )
+
         self.db_manager = FirebaseRTDBManager(
             database_url=self.instance,
         )
 
-    async def connect_to_pods(self):
-        """
-        Monitor state till ready
-        Connect to all pods
-        save / return ips to connect to
-        send auth payload
-        """
-
-        print("Establish connecgion to pods")
-
-        all_pods = list(
-            env_id.replace("_", "-")
-            for env_id in self.env_cfg.keys()
-        )
-
-        self.start_connection_thread(
-            pod_names=all_pods
-        )
-        print("All connections threads started")
-
-        """
-        self.ready_thread = threading.Thread(
-            target=_connect,
-            name="GLOBAL_READY_THREAD",
-            daemon=True
-        )
-        """
-
-        # Start Thread
-        self.ready_thread.start()
-        print("Threadstarted succesfuully")
-
-    async def connect_all_pods_process(
-            self,
-            pod_names: list[str]
-    ) -> list:
+    async def connect_all_pods_process(self) -> list:
         print("Connection request process started")
-        all_authenticated = []
         index = 0
         try:
-            while len(all_authenticated) < len(pod_names):
+            while len(self.all_authenticated) < len(self.pod_names):
                 if index < 30:
-                    for pod_name in pod_names:
+                    for pod_name in self.pod_names:
                         success: bool = await self.connect_to_pod(
                             pod_name
                         )
                         if success is True:
-                            all_authenticated.append(
-                                all_authenticated
+                            self.all_authenticated.append(
+                                pod_name
                             )
                         # Small delay between iters
                         time.sleep(1)
                         index += 1
-                        print(f"{len(all_authenticated)}/{len(pod_names)} pods connected")
+                        print(f"{len(self.all_authenticated)}/{len(self.pod_names)} pods connected")
                 else:
                     print("Max request attampts reached. Break process")
                     # Create List of missing pods that couldnt be connected to
-                    missing_pods = [name for name in pod_names if name not in all_authenticated]
+                    missing_pods = [name for name in self.pod_names if name not in self.all_authenticated]
                     return missing_pods
 
             # return empty list if while loop finished
@@ -104,13 +89,13 @@ class Connector:
             print(f"Error: {e}")
         print("Finished Connection request process")
 
-    def start_connection_thread(self, pod_names):
+    def start_connection_thread(self):
         # FB Upsert thread
         print("Create Con thread")
 
         def _connect():
             missing_pods: list = asyncio.run(
-                self.connect_all_pods_process(pod_names)
+                self.connect_all_pods_process()
             )
             if len(missing_pods):
                 # todo error intervention
@@ -144,9 +129,8 @@ class Connector:
         }
 
         try:
-            endpoint = f"{self.dom}"
             cr = await self.utils.apost(
-                url=self.endpoint,
+                url=f"{self.url}/{pod_name}",
                 data=auth_payload,
             )
             if cr and "response_key" in cr and "key" in cr and "session_id" in cr:
