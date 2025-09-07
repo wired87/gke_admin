@@ -3,11 +3,11 @@ import pprint
 import subprocess
 import time
 from tempfile import TemporaryDirectory
+from kubernetes import client
 
 from kubernetes import client, config
 
 from artifact_registry.artifact_admin import ArtifactAdmin
-from gke_admin import KUB_CLIENT
 from gke_admin.cluster_admin import ClusterManager
 from utils.file._yaml import write_yaml
 from utils.run_subprocess import exec_cmd
@@ -25,9 +25,10 @@ class GKEAdmin(ClusterManager):
 
         ClusterManager.__init__(self, cluster_name, self.region, gcp_project_id)
 
-        config.load_kube_config()
-        self.v1 = client.CoreV1Api()
+
         self.authenticate_cluster()
+        config.load_kube_config()
+        self.client = client.CoreV1Api()
 
         # IMAGE OPONENTS
         self.app_name = app_name
@@ -404,7 +405,7 @@ class GKEAdmin(ClusterManager):
 
     def get_pod_info(self, pod_name, namespace):
         try:
-            pod_details = KUB_CLIENT.read_namespaced_pod(
+            pod_details = self.client.read_namespaced_pod(
                 name=pod_name,
                 namespace=namespace,
             )
@@ -433,7 +434,7 @@ class GKEAdmin(ClusterManager):
             for env_id in env_ids
         ]
 
-        pod_list = KUB_CLIENT.list_pod_for_all_namespaces()
+        pod_list = self.client.list_pod_for_all_namespaces()
         active = []
 
         while len(converted_env_ids) < len(active):
@@ -595,6 +596,8 @@ class GKEAdmin(ClusterManager):
     def authenticate_cluster(self):
         auth_command = f"gcloud container clusters get-credentials {self.cluster_name} --region us-central1 --project aixr-401704"
         exec_cmd(auth_command)
+
+
         print("Authenticated")
 
 
