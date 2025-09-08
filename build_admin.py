@@ -8,13 +8,18 @@ from kubernetes import client, config
 
 from artifact_registry.artifact_admin import ArtifactAdmin
 from gke_admin.cluster_admin import ClusterManager
+from gke_admin.ingress.ControllerManager import IngressControllerManager
+from gke_admin.ip_creator import IPManager
 from utils.file._yaml import write_yaml
 from utils.run_subprocess import exec_cmd
 
 import dotenv
 dotenv.load_dotenv()
 
-class GKEAdmin(ClusterManager):
+class GKEAdmin(
+    ClusterManager,
+    IPManager
+):
     def __init__(
             self, 
             gcp_project_id, 
@@ -32,14 +37,22 @@ class GKEAdmin(ClusterManager):
         self.region = 'us-central1'
         self.cluster_name = cluster_name
 
-        ClusterManager.__init__(self, cluster_name, self.region, gcp_project_id)
-
-
         self.authenticate_cluster()
         config.load_kube_config()
         self.client = client.CoreV1Api()
 
-        # IMAGE OPONENTS
+        ClusterManager.__init__(self, cluster_name, self.region, gcp_project_id)
+
+        self.ip_manager = IPManager(
+            gcp_project_id,
+            self.region,
+            cluster_domain,
+            dns_zone=f"{cluster_domain.split('.')[0]}-zone"
+        )
+
+        self.ingress_ctl_manager = IngressControllerManager.__init__(self, client, self.ip_manager)
+
+        # IMAGE COMPONENTS
         self.app_name = app_name
         self.cfg = cfg
 
@@ -50,6 +63,7 @@ class GKEAdmin(ClusterManager):
             region=self.region,
             project_id=gcp_project_id
         )
+
         # Check create cluster
         self.cluster_manager()
 
@@ -106,14 +120,6 @@ class GKEAdmin(ClusterManager):
             print(f"Error creacreate_deployment_cfgte_service_cfg: {e}")
 
 
-    def create_ingress_controller(self):
-        try:
-            url = "https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.3/deploy/static/provider/cloud/deploy.yaml"
-            cmd = ["kubectl", "apply", "-f", url]
-            result = exec_cmd(cmd)
-            print("Ingress Controler created:", result)
-        except Exception as e:
-            print(f"Controller cresation error: {e}")
 
 
 
@@ -223,40 +229,7 @@ class GKEAdmin(ClusterManager):
         ]
         return container_struct
 
-    def check_ingress_controller(self) -> dict:
-        """
-        Prüft, ob der nginx Ingress-Controller im Cluster läuft.
-        Gibt ein Dict zurück mit Statusinformationen.
-        """
-        result = {
-            "installed": False,
-            "pods": [],
-            "services": [],
-        }
 
-        try:
-            # Pods im ingress-nginx Namespace
-            cmd_pods = ["kubectl", "get", "pods", "-n", "ingress-nginx", "-o", "jsonpath={.items[*].status.phase}"]
-            pods_status = exec_cmd(cmd_pods)
-            if pods_status and pods_status:
-                result["pods"] = pods_status.split()
-
-            # Services im ingress-nginx Namespace
-            cmd_svc = ["kubectl", "get", "svc", "-n", "ingress-nginx", "-o", "jsonpath={.items[*].metadata.name}"]
-            svc_result = exec_cmd(cmd_svc)
-            if svc_result and svc_result:
-                result["services"] = svc_result.split()
-
-            # Installiert, wenn Controller-Pod und Service existieren
-            if any("ingress-nginx-controller" in s for s in result["services"]):
-                result["installed"] = True
-
-        except Exception as e:
-            print(f"Fehler beim Check des Ingress-Controllers: {e}")
-
-        print("Ingress-Controller-Check Ergebnis:")
-        pprint.pp(result)
-        return result
 
     def create_ingress_service_rule(
             self,
@@ -349,17 +322,6 @@ class GKEAdmin(ClusterManager):
                 }
             }
 
-
-    def check_create_ingress_ctrl(self):
-        print("Check for ingress controlelr")
-        status = self.check_ingress_controller()
-
-        # INGRESS CONTROLLER
-        if not status["installed"]:
-            print("Install ingress controlelr")
-            self.create_ingress_controller()
-            return
-        print("Ingress already created ingress controlelr")
 
 
 
@@ -954,3 +916,19 @@ if __name__ == "__main__":
     )
     #admin.delelte_pods(all=True)
     admin.cleanup()
+"""
+
+# Services im ingress-nginx Namespace
+cmd_svc = ["kubectl", "get", "svc", "-n", "ingress-nginx", "-o", "jsonpath={.items[*].metadata.name}"]
+svc_result = exec_cmd(cmd_svc)
+if svc_result and svc_result:
+    result["services"] = svc_result.split()
+
+# Installiert, wenn Controller-Pod und Service existieren
+if any("ingress-nginx-controller" in s for s in result["services"]):
+    result["installed"] = True
+            cmd_pods = ["kubectl", "get", "pods", "-n", "ingress-nginx", "-o", "jsonpath={.items[*].status.phase}"]
+            pods_status = exec_cmd(cmd_pods)
+            if pods_status and pods_status:
+                result["pods"] = pods_status.split()
+"""
