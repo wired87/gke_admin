@@ -71,8 +71,10 @@ class ClusterManager:
             "--filter", f"name={self.cluster_name}",
             "--format", "value(name)"
         ]
+
         existing_cluster = exec_cmd(check_cmd)
         print("Check for cluster finished")
+
         if existing_cluster:
             print(f"GKE cluster '{self.cluster_name}' already exists.")
             return
@@ -96,8 +98,6 @@ class ClusterManager:
         self.await_cluster()
 
         print("Cluster creation finshed")
-
-
 
 
     def delete_cluster(self, cluster_name, location):

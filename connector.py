@@ -44,7 +44,6 @@ class Connector:
         self.connection_manager = ConnectionManager()
 
         self.gke_admin = GKEAdmin(
-            user_id=user_id,
             gcp_project_id=os.environ["GCP_PROJECT_ID"],
             cluster_domain=os.environ["CLUSTER_DOMAIN"],
             cluster_name=os.environ["GKE_SIM_CLUSTER_NAME"],
@@ -100,7 +99,7 @@ class Connector:
                 "key": pod_name
             }
         }
-
+        #env-rajtigesomnlhfyqzbvx-yfbysoypkkxtxqeljjdj-58bf644885-ffb76
         try:
             cr = await self.utils.apost(
                 url=f"{self.url}/{pod_name}",

@@ -31,18 +31,24 @@ class GKEAdmin(
             repo="qfs-repo", 
             image="qfs", 
             cfg=None, 
-            **kwargs
     ):
 
         self.region = 'us-central1'
         self.cluster_name = cluster_name
 
+        # AUTH
         self.authenticate_cluster()
         config.load_kube_config()
-        self.client = client.CoreV1Api()
 
+        # CLIENTS
+        self.client = client.ApiClient()
+        self.core = client.CoreV1Api(self.client)
+
+
+        # PARENTS
         ClusterManager.__init__(self, cluster_name, self.region, gcp_project_id)
 
+        # CLASSES
         self.ip_manager = IPManager(
             gcp_project_id,
             self.region,
@@ -50,7 +56,11 @@ class GKEAdmin(
             dns_zone=f"{cluster_domain.split('.')[0]}-zone"
         )
 
-        self.ingress_ctl_manager = IngressControllerManager.__init__(self, client, self.ip_manager)
+        self.ingress_ctlr_manager = IngressControllerManager(
+            self.client,
+            self.core,
+            self.ip_manager
+        )
 
         # IMAGE COMPONENTS
         self.app_name = app_name
@@ -87,16 +97,15 @@ class GKEAdmin(
         """
         Creates a Kubernetes Pod from a given YAML file.
         """
-        try:
-            cmd = ['kubectl', 'apply', '-f', file_path]
-            result = exec_cmd(cmd)
 
-            if result is not None:
-                print(f"Resource was successfully created from '{file_path}'.")
-            else:
-                raise ValueError("Failed create_resource_from_yaml")
-        except subprocess.CalledProcessError as e:
-            print(f"Error creating Pod: {e}")
+        cmd = ['kubectl', 'apply', '-f', file_path]
+        result = exec_cmd(cmd)
+
+        if result is not None:
+            print(f"Resource was successfully created from '{file_path}'.")
+        else:
+            raise ValueError("Failed create_resource_from_yaml")
+
 
     def create_deployment_cfg(
             self,
@@ -379,7 +388,7 @@ class GKEAdmin(
 
     def get_pod_info(self, pod_name, namespace):
         try:
-            pod_details = self.client.read_namespaced_pod(
+            pod_details = self.core.read_namespaced_pod(
                 name=pod_name,
                 namespace=namespace,
             )
@@ -402,16 +411,16 @@ class GKEAdmin(
             bool: True when all pods are running.
         """
         print(f"Waiting for pods {env_ids} to be 'Running'...")
-
+        active = []
         converted_env_ids = [
             env_id.replace("_", "-")
             for env_id in env_ids
         ]
 
-        pod_list = self.client.list_pod_for_all_namespaces()
-        active = []
+        pod_list = self.core.list_pod_for_all_namespaces()
 
-        while len(converted_env_ids) < len(active):
+
+        while len(converted_env_ids) > len(active):
             try:
                 # List all pods in the specified namespace
 
@@ -426,11 +435,11 @@ class GKEAdmin(
                             #namespace = pod.metadata.namespace
                             if status == "Running":
                                 active.append(name)
-                                print(f"Pod '{name}' is in state '{status}'. Waiting...")
+                                print(f"Pod '{name}' is in state '{status}'.")
+                                print(f"{len(active)}/{len(converted_env_ids)} creaed pods are active")
 
                 # Wait for a few seconds before checking again
                 time.sleep(2)
-
             except client.ApiException as e:
                 print(f"Error checking pod status: {e}")
             except Exception as e:

@@ -11,10 +11,12 @@ class IngressControllerManager:
     def __init__(
             self,
             client,
+            core,
             ip_manager: IPManager,
             namespace="ingress-nginx",
             kubeconfig_path=None,
     ):
+        self.core = core
         self.client = client
         self.ip_manager = ip_manager
         self.namespace = namespace
@@ -27,13 +29,12 @@ class IngressControllerManager:
             except:
                 config.load_kube_config()
 
-
     def check_create_ingress_ctrl(self):
-        print("Check for ingress controlelr")
-        status = self.check_ingress_controller()
+        print("Check for ingress controller")
+        controller_exists = self.check_ingress_controller()
 
         # INGRESS CONTROLLER
-        if not status["installed"]:
+        if controller_exists is False:
             self.controller_creation_process()
         print("Ingress already created ingress controlelr")
 
@@ -71,38 +72,35 @@ class IngressControllerManager:
             print(f"Controller cresation error: {e}")
 
 
-    def check_ingress_controller(self) -> dict:
+    def check_ingress_controller(self) -> bool:
         """
         Prüft, ob der nginx Ingress-Controller im Cluster läuft.
         Gibt ein Dict zurück mit Statusinformationen.
         """
-        result = {
-            "installed": False,
-            "pods": [],
-            "services": [],
-        }
-
         try:
             # Pods im ingress-nginx Namespace
-            pods = self.client.list_namespaced_pod(namespace="ingress-nginx")
-            result["pods"] = [p.status.phase for p in pods.items]
+            pods = self.core.list_namespaced_pod(namespace=self.namespace)
+            print(f"Pods from  {self.namespace} received:", pods.items)
+
+            if not len(list(pods.items)):
+                print("No ingress controller pods fond")
+                return False
 
             # List Services in ingress-nginx namespace
-            svcs = self.client.list_namespaced_service(
-                namespace="ingress-nginx"
+            svcs = self.core.list_namespaced_service(
+                namespace=self.namespace
             )
-            result["services"] = [s.metadata.name for s in svcs.items]
 
-            # Mark installed if controller service exists
-            if any("ingress-nginx-controller" in s for s in result["services"]):
-                result["installed"] = True
+            for svc in svcs.items:
+                name = svc.metadata.name
+                if "controller" in name:
+                    print(f"Existing ingress controller found: {name}")
+                    return True
 
         except Exception as e:
             print(f"Fehler beim Check des Ingress-Controllers: {e}")
-
-        print("Ingress-Controller-Check Ergebnis:")
-        pprint.pp(result)
-        return result
+        print("No controller could be identified")
+        return False
 
 
 
