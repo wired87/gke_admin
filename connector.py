@@ -74,11 +74,10 @@ class Connector:
                 else:
                     print("Max request attampts reached. Break process")
                     # Create List of missing pods that couldnt be connected to
-                    missing_pods = [name for name in self.pod_names if name not in self.all_authenticated]
-                    return missing_pods
+                    self.pod_names = [name for name in self.pod_names if name not in self.all_authenticated]
 
             # return empty list if while loop finished
-            return []
+            return self.pod_names
 
         except Exception as e:
             print(f"Error: {e}")

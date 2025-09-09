@@ -85,6 +85,7 @@ class IngressControllerManager:
             if not len(list(pods.items)):
                 print("No ingress controller pods fond")
                 return False
+            print(f"List services in -n {self.namespace}")
 
             # List Services in ingress-nginx namespace
             svcs = self.core.list_namespaced_service(

@@ -419,9 +419,10 @@ class GKEAdmin(
 
         pod_list = self.core.list_pod_for_all_namespaces()
 
-
+        i = 0
         while len(converted_env_ids) > len(active):
             try:
+                print(f"Check iter: {i}")
                 # List all pods in the specified namespace
 
                 # Check the status of each pod
