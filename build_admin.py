@@ -1,5 +1,4 @@
 import os
-import pprint
 import subprocess
 import time
 from tempfile import TemporaryDirectory
@@ -43,7 +42,8 @@ class GKEAdmin(
         # CLIENTS
         self.client = client.ApiClient()
         self.core = client.CoreV1Api(self.client)
-
+        self.configuration = client.Configuration()
+        self.configuration.debug = False
 
         # PARENTS
         ClusterManager.__init__(self, cluster_name, self.region, gcp_project_id)
@@ -97,8 +97,9 @@ class GKEAdmin(
         """
         Creates a Kubernetes Pod from a given YAML file.
         """
-
         cmd = ['kubectl', 'apply', '-f', file_path]
+        print(f"create_resource_from_yaml from cmd {cmd}")
+
         result = exec_cmd(cmd)
 
         if result is not None:
@@ -117,7 +118,7 @@ class GKEAdmin(
                 app_name = self.app_name
 
             print("cfg struct create_deployment_cfg")
-            pprint.pp(cfg_struct)
+            #pprint.pp(cfg_struct)
 
             creator_struct = {
                 **self.create_pod_metadata(name=app_name),
@@ -145,7 +146,7 @@ class GKEAdmin(
 
         container_spec = self.containers_section(env_id, world_cfg_item)
         print("cfg struct get_spec")
-        pprint.pp(world_cfg_item)
+        #pprint.pp(world_cfg_item)
 
         spec_struct = {
             "replicas": 1,
@@ -211,10 +212,11 @@ class GKEAdmin(
         #if image is None:
         #if self.image is None:
         image = self.artifact_admin.get_latest_image()
-        """
-        else:
-            image = self.image
-        """
+        if image is None:
+            raise ValueError(
+                "Couldnt find an image in AR"
+            )
+
         if name is None:
             name = self.app_name
 
@@ -341,12 +343,12 @@ class GKEAdmin(
         """
         return {
             "requests": {
-                "cpu": world_cfg["resources"]["cpu"],
-                "memory": world_cfg["resources"]["mem"]
+                "cpu": world_cfg["cpu"],
+                "memory": world_cfg["mem"]
             },
             "limits": {
-                "cpu": world_cfg["resources"]["cpu_limit"],
-                "memory": world_cfg["resources"]["mem_limit"]
+                "cpu": world_cfg["cpu_limit"],
+                "memory": world_cfg["mem_limit"]
             }
         }
 
@@ -393,7 +395,7 @@ class GKEAdmin(
                 namespace=namespace,
             )
             print("Pod details successfully retrieved:")
-            print(pod_details.to_dict())
+            #print(pod_details.to_dict())
             return pod_details.to_dict()
         except client.ApiException as e:
             print(f"Error retrieving pod details: {e}")
@@ -410,12 +412,12 @@ class GKEAdmin(
         Returns:
             bool: True when all pods are running.
         """
-        print(f"Waiting for pods {env_ids} to be 'Running'...")
         active = []
         converted_env_ids = [
             env_id.replace("_", "-")
             for env_id in env_ids
         ]
+        print(f"Waiting for pods {converted_env_ids} to be 'Running'...")
 
         pod_list = self.core.list_pod_for_all_namespaces()
 
@@ -423,6 +425,7 @@ class GKEAdmin(
         while len(converted_env_ids) > len(active):
             try:
                 print(f"Check iter: {i}")
+                i+=1
                 # List all pods in the specified namespace
 
                 # Check the status of each pod
@@ -437,7 +440,7 @@ class GKEAdmin(
                             if status == "Running":
                                 active.append(name)
                                 print(f"Pod '{name}' is in state '{status}'.")
-                                print(f"{len(active)}/{len(converted_env_ids)} creaed pods are active")
+                                print(f"{len(active)}/{len(converted_env_ids)} created pods are active")
 
                 # Wait for a few seconds before checking again
                 time.sleep(2)
@@ -464,7 +467,7 @@ class GKEAdmin(
 
 
     def create_deployments_process(self, env_cfg:dict) -> dict:
-        print(f"create_deployments_process env_cfg: {env_cfg}")
+        print(f"create_deployments_process env_cfg")
 
         try:
             # GET DEPLOYMENT COMMANDS
@@ -488,7 +491,7 @@ class GKEAdmin(
                     target_port=self.cluster_port,
                 )
             print("Deployment process finished.Updated env_cfg.")
-            pprint.pp(env_cfg)
+            #pprint.pp(env_cfg)
 
         except Exception as e:
             print(f"Exception while create_deployments_process: {e}")
@@ -593,7 +596,7 @@ class GKEAdmin(
                 for pod in list(all_pods):
                     if pod.startswith(pod) and env_id not in pod_identifiers:
                         world_cfgs[env_id]["pod_name"] = pod
-        print(f"envcfg updated with pod names: {world_cfgs}")
+        print(f"envcfg updated with pod names")
         return world_cfgs
 
 
@@ -644,7 +647,7 @@ class GKEAdmin(
             return ip
 
         print("Extracting Extern IPs")
-        services = self.v1.list_namespaced_service(
+        services = self.core.list_namespaced_service(
             namespace=namespace
         )
 
@@ -661,14 +664,14 @@ class GKEAdmin(
                 else:
                     print(f"Skip IP extraction for {name}")
         print("Finished IP Extraction")
-        pprint.pp(result)
+        #pprint.pp(result)
         return result
 
     def get_depl_cmd(self, env_cfg:dict):
         try:
             for env_id, struct in env_cfg.items():
                 print(F"Create depl cmd rom struct:")
-                pprint.pp(struct)
+                #pprint.pp(struct)
 
                 conv_env_id = env_id.replace('_', '-')
 

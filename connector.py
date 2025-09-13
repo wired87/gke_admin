@@ -15,7 +15,7 @@ class Connector:
             self,
             pod_names,
             user_id,
-            cluster_root,
+            #cluster_root,
             gcp_project_id,
             cluster_domain,
             cluster_name,
@@ -28,7 +28,7 @@ class Connector:
         self.user_id = user_id
         self.pod_names:list = pod_names
 
-        self.cluster_root = cluster_root
+        #self.cluster_root = cluster_root
         self.instance = os.environ.get("FIREBASE_RTDB")
 
 

@@ -66,8 +66,8 @@ class IngressControllerManager:
         try:
             url = "https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.3/deploy/static/provider/cloud/deploy.yaml"
             cmd = ["kubectl", "apply", "-f", url]
-            result = exec_cmd(cmd)
-            print("Ingress Controler created:", result)
+            exec_cmd(cmd)
+            print("Ingress Controler created")
         except Exception as e:
             print(f"Controller cresation error: {e}")
 
@@ -80,7 +80,7 @@ class IngressControllerManager:
         try:
             # Pods im ingress-nginx Namespace
             pods = self.core.list_namespaced_pod(namespace=self.namespace)
-            print(f"Pods from  {self.namespace} received:", pods.items)
+            print(f"Pods from  {self.namespace} received")
 
             if not len(list(pods.items)):
                 print("No ingress controller pods fond")
@@ -95,7 +95,7 @@ class IngressControllerManager:
             for svc in svcs.items:
                 name = svc.metadata.name
                 if "controller" in name:
-                    print(f"Existing ingress controller found: {name}")
+                    print(f"Existing ingress controller found")
                     return True
 
         except Exception as e:
