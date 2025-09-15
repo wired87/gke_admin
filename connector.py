@@ -56,17 +56,21 @@ class Connector:
     async def connect_all_pods_process(self) -> list:
         print("Connection request process started")
         index = 0
+        max_con_attempts=50
         try:
             while len(self.all_authenticated) < len(self.pod_names):
-                if index < 30:
+                if index < max_con_attempts:
+                    print("connection index", index)
                     for pod_name in self.pod_names:
                         success: bool = await self.connect_to_pod(
                             pod_name
                         )
+                        print(f"{pod_name} connection success: {success}")
                         if success is True:
                             self.all_authenticated.append(
                                 pod_name
                             )
+
                         # Small delay between iters
                         time.sleep(5)
                         index += 1
@@ -75,7 +79,7 @@ class Connector:
                     print("Max request attampts reached. Break process")
                     # Create List of missing pods that couldnt be connected to
                     self.pod_names = [name for name in self.pod_names if name not in self.all_authenticated]
-
+                    break
             # return empty list if while loop finished
             return self.pod_names
 
@@ -100,19 +104,19 @@ class Connector:
         }
         #env-rajtigesomnlhfyqzbvx-yfbysoypkkxtxqeljjdj-58bf644885-ffb76
         try:
-            cr = await self.utils.apost(
+            response = await self.utils.apost(
                 url=f"{self.url}/{pod_name}",
                 data=auth_payload,
             )
-            if cr and "response_key" in cr and "key" in cr and "session_id" in cr:
-                if cr["key"] == pod_name:
+            if response and "response_key" in response and "key" in response and "session_id" in response:
+                if response["key"] == pod_name:
                     # Successful pod authenticated -> append valid
                     print(f"Pod {pod_name} connected successfully")
                     return True
                 else:
-                    print(f"Invlalid key received: {cr['key']}")
+                    print(f"Invlalid key received: {response['key']}")
             else:
-                raise ValueError("No con request triger controlled Exceptio")
+                raise ValueError(f"Invalid response payload: {response}")
         except Exception as e:
             print(f"Error fetching: {e}")
         return False

@@ -248,7 +248,7 @@ class GKEAdmin(
     ):
         if app_name is None:
             app_name = self.app_name
-        app_name=app_name.replace('_', '-')
+        app_name = app_name.replace('_', '-')
 
         annotations = {
             "nginx.ingress.kubernetes.io/rewrite-target": "/",
@@ -259,7 +259,6 @@ class GKEAdmin(
             "nginx.ingress.kubernetes.io/send-timeout": "3000",
             "nginx.ingress.kubernetes.io/ssl-redirect": "true",
         }
-
         ingress_controller = {
             **self.create_pod_metadata(
                 name=f"ingress-{app_name}",
@@ -270,7 +269,7 @@ class GKEAdmin(
             "apiVersion": "networking.k8s.io/v1",
             "kind": "Ingress",
             "metadata": {
-                "name": f"{self.domain}-ingress",
+                "name": f"{app_name}",
                 "annotations": annotations
             },
             "spec": {
@@ -280,7 +279,8 @@ class GKEAdmin(
                             f"{self.cluster_subdomain}.{self.domain}",
                             f"www.{self.cluster_subdomain}.{self.domain}"
                         ],
-                        #"secretName": f"{self.domain}-tls"  # muss als Secret vorhanden sein
+                        "secretName": "clusterexpress-tls"
+
                     }
                 ],
                 "rules": [
@@ -354,7 +354,7 @@ class GKEAdmin(
 
     def create_service_cfg(
             self,
-            service_type="ClusterIP",  # "LoadBalancer",
+            service_type="LoadBalancer",  # "ClusterIP(Kein direkter Zugriff von außen.)",
             namespace="default",
             api_version="v1",
             kind="Service",
@@ -419,27 +419,25 @@ class GKEAdmin(
         ]
         print(f"Waiting for pods {converted_env_ids} to be 'Running'...")
 
-        pod_list = self.core.list_pod_for_all_namespaces()
-
         i = 0
         while len(converted_env_ids) > len(active):
             try:
                 print(f"Check iter: {i}")
+
                 i+=1
+
                 # List all pods in the specified namespace
+                pod_list = self.get_pod_list()
 
                 # Check the status of each pod
                 for pod in pod_list.items:
                     name = pod.metadata.name
-
                     for env_id in converted_env_ids:
                         if name == env_id or name.startswith(env_id) or env_id in name:
                             status = pod.status.phase
-                            print("Pod State:", status)
-                            #namespace = pod.metadata.namespace
+                            print(f"{name} pod state:", status)
                             if status == "Running":
                                 active.append(name)
-                                print(f"Pod '{name}' is in state '{status}'.")
                                 print(f"{len(active)}/{len(converted_env_ids)} created pods are active")
 
                 # Wait for a few seconds before checking again
@@ -452,8 +450,15 @@ class GKEAdmin(
         return active
 
 
-
-
+    def get_pod_list(self):
+        pod_list = self.core.list_namespaced_pod(
+            namespace="default"
+        )
+        print(f"received {len(pod_list.items)} pods:")
+        for pod in pod_list.items:
+            name = pod.metadata.name
+            print(name)
+        return pod_list
 
 
 
@@ -583,8 +588,6 @@ class GKEAdmin(
     def authenticate_cluster(self):
         auth_command = f"gcloud container clusters get-credentials {self.cluster_name} --region us-central1 --project aixr-401704"
         exec_cmd(auth_command)
-
-
         print("Authenticated")
 
 
@@ -813,6 +816,75 @@ class GKEAdmin(
             print(f"Secret '{secret_name}' successfully created")
         print("All secrets created")
         return env_cfg
+
+    def generate_selfsigned_cert(
+            key_file="privkey.pem",
+            cert_file="fullchain.pem",
+            days=365,
+            common_name="cluster.clusterexpress.com",
+            bits=4096
+    ):
+        """
+        Generates a self-signed TLS certificate using OpenSSL.
+        """
+        cmd = [
+            "openssl", "req",
+            "-x509",
+            "-newkey", f"rsa:{bits}",
+            "-keyout", key_file,
+            "-out", cert_file,
+            "-days", str(days),
+            "-nodes",
+            "-subj", f"/CN={common_name}"
+        ]
+        print("Executing:", " ".join(cmd))
+        exec_cmd(cmd)
+        print(f"✅ Self-signed certificate created: {cert_file}, key: {key_file}")
+
+    def secret_process(self):
+        print("start secret_process")
+        self.generate_selfsigned_cert()
+        self.create_tls_secret()
+        print("finished secret_process")
+
+
+
+    def create_tls_secret(
+            self,
+            secret_name="clusterexpress-tls",
+            namespace="default",
+            cert_file="fullchain.pem",
+            key_file="privkey.pem"
+    ):
+        """
+        Creates a TLS secret if it does not already exist.
+        """
+        # Check if secret exists
+        check_cmd = [
+            "kubectl", "get", "secret", secret_name,
+            "-n", namespace,
+            "-o", "name"
+        ]
+        try:
+            result = exec_cmd(check_cmd)
+            if result.stdout.strip():
+                print(f"✅ Secret '{secret_name}' already exists in namespace '{namespace}'.")
+                return
+        except subprocess.CalledProcessError:
+            print(f"ℹ️ Secret '{secret_name}' not found in namespace '{namespace}', creating...")
+
+        # Create the secret
+        create_cmd = [
+            "kubectl", "create", "secret", "tls", secret_name,
+            f"--cert={cert_file}",
+            f"--key={key_file}",
+            "-n", namespace
+        ]
+        print("Executing:", " ".join(create_cmd))
+        subprocess.run(create_cmd, check=True)
+        print(f"✅ Secret '{secret_name}' created successfully in namespace '{namespace}'.")
+
+
 
     def get_intern_pod_ips(self, pod_names: list) -> dict:
         """
