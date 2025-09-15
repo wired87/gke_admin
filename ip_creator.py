@@ -1,10 +1,8 @@
 from google.cloud import dns
 import subprocess
-
 from utils.run_subprocess import exec_cmd
 
-
-class IPManager:
+class DNSManager:
     def __init__(
             self,
             project_id: str,
@@ -124,10 +122,32 @@ class IPManager:
         changes.create()
         print(f"✅ DNS record created: {fqdn} → {ip_address}")
 
+    def delete_dns_record(self, record_name: str):
+        """
+        Löscht einen A-Record aus Cloud DNS.
+        :param record_name: Subdomain (z.B. 'sims' für sims.clusterexpress.com)
+        """
+        zone = self.dns_client.zone(self.dns_zone)
+        fqdn = f"{record_name}.{self.domain}"
 
+        records = list(zone.list_resource_record_sets())
+        target_record = None
+        for r in records:
+            if r.name == fqdn and r.record_type == "A":
+                target_record = r
+                break
+
+        if not target_record:
+            print(f"❌ Kein A-Record gefunden für {fqdn}")
+            return
+
+        changes = zone.changes()
+        changes.delete_record_set(target_record)
+        changes.create()
+        print(f"🗑️ DNS record gelöscht: {fqdn}")
 # Example usage:
 if __name__ == "__main__":
-    manager = IPManager(
+    manager = DNSManager(
         project_id="aixr-401704",
         region="us-central1",
         domain="clusterexpress.com",

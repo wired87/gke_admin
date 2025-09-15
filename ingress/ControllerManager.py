@@ -1,8 +1,8 @@
-import pprint
+
 import time
 from kubernetes import config
 
-from gke_admin.ip_creator import IPManager
+from gke_admin.ip_creator import DNSManager
 from utils.run_subprocess import exec_cmd
 
 
@@ -12,7 +12,7 @@ class IngressControllerManager:
             self,
             client,
             core,
-            ip_manager: IPManager,
+            ip_manager: DNSManager,
             namespace="ingress-nginx",
             kubeconfig_path=None,
     ):
@@ -21,13 +21,14 @@ class IngressControllerManager:
         self.ip_manager = ip_manager
         self.namespace = namespace
 
-        if kubeconfig_path:
+        """if kubeconfig_path:
             config.load_kube_config(config_file=kubeconfig_path)
         else:
             try:
                 config.load_incluster_config()
             except:
                 config.load_kube_config()
+        """
 
     def check_create_ingress_ctrl(self):
         print("Check for ingress controller")
