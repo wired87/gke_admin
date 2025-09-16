@@ -18,10 +18,8 @@ class GKEBuildAdmin(
             self,
             core,
             gcp_project_id,
-            cluster_domain, 
             cluster_port,
-            cluster_subdomain,
-            app_name=None, 
+            app_name=None,
             repo="qfs-repo", 
             image="qfs", 
             cfg=None, 
@@ -34,8 +32,7 @@ class GKEBuildAdmin(
         self.repo = repo
 
         self.project_id = gcp_project_id
-        self.domain = cluster_domain
-        self.cluster_subdomain = cluster_subdomain
+
         self.cluster_port = int(cluster_port)
 
         # RAY cluster image

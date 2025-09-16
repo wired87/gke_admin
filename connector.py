@@ -17,72 +17,72 @@ class Connector:
             #cluster_root,
             gcp_project_id,
             cluster_domain,
-            cluster_name,
             cluster_port,
-            sub_domain
+            request_type="https",
     ):
         self.ready_sessions = []
         self.all_authenticated = []
-
+        self.request_type=request_type
         self.user_id = user_id
 
-        #self.cluster_root = cluster_root
         self.instance = os.environ.get("FIREBASE_RTDB")
-
 
         self.project_id = gcp_project_id
 
-        self.sub_domain = sub_domain
         self.domain = cluster_domain
-        self.url = f"https://{self.sub_domain}.{self.domain}"
-        self.cluster_subdomain = cluster_name
+        self.url = f"{request_type}://{self.domain}"
         self.cluster_port = int(cluster_port)
 
         self.utils = Utils()
         self.connection_manager = ConnectionManager()
-
-
         self.db_manager = FirebaseRTDBManager()
 
+
     async def connect_all_pods_process(
-            self,
-            pod_names
+            self, env_ids
     ) -> list:
         print("Connection request process started")
         index = 0
+
+        env_ids = [
+            env_id.replce("_", "-")
+            for env_id in env_ids
+        ]
+
+
         max_con_attempts=50
         try:
-            while len(self.all_authenticated) < len(pod_names):
+            while len(self.all_authenticated) < len(env_ids):
                 if index < max_con_attempts:
                     print("connection index", index)
-                    for pod_name in pod_names:
+                    for env_id in env_ids:
                         success: bool = await self.connect_to_pod(
-                            pod_name
+                            env_id
                         )
-                        print(f"{pod_name} connection success: {success}")
+                        print(f"{env_id} connection success: {success}")
                         if success is True:
                             self.all_authenticated.append(
-                                pod_name
+                                env_id
                             )
 
                         # Small delay between iters
                         time.sleep(5)
                         index += 1
-                        print(f"{len(self.all_authenticated)}/{len(pod_names)} pods connected")
+                        print(f"{len(self.all_authenticated)}/{len(env_ids)} pods connected")
                 else:
                     print("Max request attampts reached. Break process")
                     # Create List of missing pods that couldnt be connected to
-                    pod_names = [name for name in pod_names if name not in self.all_authenticated]
+                    pod_names = [name for name in env_ids if name not in self.all_authenticated]
                     break
             # return empty list if while loop finished
-            return pod_names
+            return env_ids
 
         except Exception as e:
             print(f"Error: {e}")
         print("Finished Connection request process")
 
 
-    async def connect_to_pod(self, pod_name):
+    async def connect_to_pod(self, env_id):
         """
         Connect to a GKE cluster based on its ip:port
         :param ip:
@@ -93,19 +93,23 @@ class Connector:
         auth_payload = {
             "type": "auth",
             "data": {
-                "key": pod_name
+                "key": env_id
             }
         }
+
+        url = f"{self.url}/{env_id}/root/"
+        print("Requestig:", url)
+
         #env-rajtigesomnlhfyqzbvx-yfbysoypkkxtxqeljjdj-58bf644885-ffb76
         try:
             response = await self.utils.apost(
-                url=f"{self.url}/{pod_name}",
+                url=url,
                 data=auth_payload,
             )
             if response and "response_key" in response and "key" in response and "session_id" in response:
-                if response["key"] == pod_name:
+                if response["key"] == env_id:
                     # Successful pod authenticated -> append valid
-                    print(f"Pod {pod_name} connected successfully")
+                    print(f"Pod {env_id} connected successfully")
                     return True
                 else:
                     print(f"Invlalid key received: {response['key']}")

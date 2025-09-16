@@ -189,6 +189,7 @@ class GKEUtils:
         try:
             for app_name, struct in deployment_struct.items():
                 app_name = app_name.replace('_', '-')
+                cfg_struct[app_name] = {}
                 cfg_struct[app_name]["deployment"] = self.create_deployment_cfg(
                     app_name,
                     struct)
@@ -198,7 +199,8 @@ class GKEUtils:
 
                 cfg_struct[app_name]["service"] = self.create_service_cfg(
                     name=app_name,
-                    kind="ClusterIP")
+                    service_type="ClusterIP"
+                )
 
             print("Cfgs created and saved locally")
             return cfg_struct
@@ -239,50 +241,58 @@ class GKEUtils:
     def create_ingress_service_rule(
             self,
             app_name=None,
+            load_balancer_ip=None,
             #secret_name="clusterexpress-tls"
     ):
         if app_name is None:
             app_name = self.app_name
 
+        cert = f"{self.cluster_domain.replace('.','-')}"
         annotations = {
             "nginx.ingress.kubernetes.io/rewrite-target": "/",
+            #"nginx.ingress.kubernetes.io/load-balancer-ip": load_balancer_ip,
             "nginx.ingress.kubernetes.io/proxy-body-size": "50m",
             "nginx.ingress.kubernetes.io/proxy-connect-timeout": "3000",
-            "nginx.ingress.kubernetes.io/managed-certificates": f"{self.cluster_domain.replace('.','-')}",
+            "nginx.ingress.kubernetes.io/managed-certificates": cert,
             "nginx.ingress.kubernetes.io/proxy-read-timeout": "3000",
             "nginx.ingress.kubernetes.io/proxy-send-timeout": "3000",
             "nginx.ingress.kubernetes.io/send-timeout": "3000",
             "nginx.ingress.kubernetes.io/ssl-redirect": "true",
         }
-        ingress_controller = {
-            **self.create_pod_metadata(
-                api_version="networking.k8s.io/v1",
-                name=f"ingress-{app_name}",
-                labels={},
-                resource_kind="Ingress",
-                annotations=annotations
-            ),
-            "spec": {
-                "tls": [
-                    {
-                        "hosts": [
-                            f"{self.cluster_subdomain}.{self.cluster_domain}",
-                            f"www.{self.cluster_subdomain}.{self.cluster_domain}"
-                        ],
-                        #"secretName": secret_name
 
-                    }
-                ],
-                "rules": [
-                    self.create_ingress_rule(
-                        path=f"/{app_name}",
-                        name=app_name,
-                    ),
-                ]
+        try:
+            ingress_controller = {
+                **self.create_pod_metadata(
+                    api_version="networking.k8s.io/v1",
+                    name=f"ingress-{app_name}",
+                    labels={},
+                    resource_kind="Ingress",
+                    annotations=annotations
+                ),
+                "spec": {
+                    "ingressClassName": "nginx",
+                    "tls": [
+                        {
+                            "hosts": [
+                                f"{self.cluster_domain}",
+                                f"www.{self.cluster_domain}"
+                            ],
+                            #"secretName": secret_name
+
+                        }
+                    ],
+                    "rules": [
+                        self.create_ingress_rule(
+                            path=f"/{app_name}",
+                            name=app_name,
+                        ),
+                    ]
+                }
             }
-        }
-        print("Ingress rule spec created")
-        return ingress_controller
+            print("Ingress rule spec created")
+            return ingress_controller
+        except Exception as e:
+            print(f"Err create_ingress_service_rule: {e}")
 
 
 
@@ -342,16 +352,16 @@ class GKEUtils:
         Returns:
             bool: True when all pods are running.
         """
+        print(f"========== AWAIT RUNNING POD STATE ==========")
         try:
-            active = []
+            active_pods = []
             converted_env_ids = [
                 env_id.replace("_", "-")
                 for env_id in env_ids
             ]
-            print(f"Waiting for pods {converted_env_ids} to be 'Running'...")
 
             i = 0
-            while len(converted_env_ids) > len(active):
+            while len(converted_env_ids) > len(active_pods):
                 try:
                     print(f"Check iter: {i}")
 
@@ -368,15 +378,15 @@ class GKEUtils:
                                 status = pod.status.phase
                                 print(f"{name} pod state:", status)
                                 if status == "Running":
-                                    active.append(name)
-                                    print(f"{len(active)}/{len(converted_env_ids)} created pods are active")
+                                    active_pods.append(name)
+                                    print(f"{len(active_pods)}/{len(converted_env_ids)} created pods are active")
 
                     # Wait for a few seconds before checking again
                     time.sleep(2)
                 except Exception as e:
                     print(f"An unexpected error occurred: {e}")
             print("All created pods are Running")
-            return active
+            return active_pods
 
         except Exception as e:
             print(f"Err await_resources_alive: {e}")
@@ -403,13 +413,16 @@ class GKEUtils:
             service_name,
             namespace="default",
     ):
-        print("start check_service_exists")
+        print(f"start check_service_exists {service_name} -n {namespace}")
         try:
             service = self.core.read_namespaced_service(
                 name=service_name,
-                namespace=namespace)
+                namespace=namespace
+            )
             print(f"Service found: {service}")
-            return service
+            if service is not None:
+                service_dict = service.to_dict()
+                return service_dict
         except Exception as e:
             print(f"Err check_service_exists: {e}")
 

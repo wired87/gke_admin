@@ -7,19 +7,18 @@ class DNSManager:
             self,
             project_id: str,
             region: str,
-            domain: str,
-            dns_zone: str
+            dns_name: str,
     ):
         """
         :param project_id: GCP Project ID
         :param region: Region where GKE is running (e.g., 'us-central1')
-        :param domain: Domain name managed in Cloud DNS (e.g., 'clusterexpress.com.')
-        :param dns_zone: Cloud DNS zone name (not domain, but the zone identifier)
+        :param dns_name: dns_name name managed in Cloud DNS (e.g., 'clusterexpress.com.')
+        :param self.dns_name: Cloud DNS zone name (not dns_name, but the zone identifier)
         """
         self.project_id = project_id
         self.region = region
-        self.domain = domain.rstrip(".") + "."  # enforce trailing dot
-        self.dns_zone = dns_zone
+        self.dns_name = f"{dns_name}." # cluster.clusterexpress.com
+        self.zone_name = dns_name.replace(".", "-") # cluster.clusterexpress.com
         self.dns_client = dns.Client(project=project_id)
 
     def reserve_static_ip(self, name: str) -> str:
@@ -98,37 +97,110 @@ class DNSManager:
         exec_cmd(cmd)
         print(f"🗑️ Statische IP {name} gelöscht.")
 
-
-    def create_dns_record(self, record_name: str, ip_address: str, ttl: int = 300):
+    def create_dns_record(
+            self,
+            ip_address: str,
+            ttl: int = 300
+    ):
         """
         Create/replace an A record in Cloud DNS pointing to the reserved IP.
-        :param record_name: Subdomain (e.g., 'sims' for sims.clusterexpress.com)
+        :param record_name: Subdns_name (e.g., 'sims' for sims.clusterexpress.com)
         :param ip_address: Static IP to point to
         :param ttl: Time-to-live (seconds)
         """
-        zone = self.dns_client.zone(self.dns_zone)
-        fqdn = f"{record_name}.{self.domain}"
+        try:
+            print("start create_dns_record")
+            zone = self.check_create_zone()
+            if zone is None:
+                print(f"Zone {self.dns_name} is None")
+                return
+            changes = zone.changes()
+            records = list(zone.list_resource_record_sets())
 
-        # Remove old record if exists
-        changes = zone.changes()
-        records = list(zone.list_resource_record_sets())
-        for r in records:
-            if r.name == fqdn and r.record_type == "A":
-                changes.delete_record_set(r)
+            # Check if a matching record already exists
+            record_exists = False
+            for r in records:
+                # The record name from the API is a FQDN (fully qualified dns_name name), so we need to add a dot to our record_name
+                if r.name == self.dns_name and r.record_type == "A" and r.rrdatas == [ip_address]:
+                    record_exists = True
+                    print(f"DNS record with name '{self.dns_name}' and IP '{ip_address}' already exists. Skipping creation.")
+                    return
 
-        # Add new record
-        record_set = zone.resource_record_set(fqdn, "A", ttl, [ip_address])
-        changes.add_record_set(record_set)
-        changes.create()
-        print(f"✅ DNS record created: {fqdn} → {ip_address}")
+            # If a matching record with a different IP exists, delete it first
+            for r in records:
+                if r.name == self.dns_name and r.record_type == "A" and r.rrdatas != [ip_address]:
+                    print(f"DNS record for '{self.dns_name}' exists with a different IP. Deleting old record.")
+                    changes.delete_record_set(r)
+
+            # Add new record
+            record_set = zone.resource_record_set(
+                self.dns_name,
+                "A",
+                ttl,
+                [ip_address]
+            )
+            print("add record:", record_set)
+
+            changes.add_record_set(record_set)
+            changes.create()
+            print(f"✅ DNS record created: {self.dns_name} → {ip_address}")
+
+        except Exception as e:
+            print(f"Err create_dns_record: {e}")
+
+
+
+    def check_create_zone(self):
+        """
+        Checks if a DNS zone exists and creates it if it doesn't.
+        """
+        try:
+            # Check if the zone already exists.
+            exists, zone = self.get_zone()
+            if exists is True:
+                print(f"DNS Zone '{self.dns_name}' already exists.")
+                return zone
+            else:
+                raise ValueError("Zone doesnt exists")
+        except Exception as e:
+            print(f"DNS Zone '{self.dns_name}' not found: {e}")
+            # If the zone doesn't exist, create it.
+            try:
+                self.dns_client.zone(
+                    name=self.zone_name,
+                    dns_name=self.dns_name
+                ).create()
+                print("zone created")
+                exists, zone = self.get_zone()
+                return zone
+
+            except Exception as create_err:
+                print(f"Error creating DNS Zone: {create_err}")
+                return None
+
+
+    def get_zone(self):
+        zone = self.dns_client.zone(
+            name=self.zone_name,
+            dns_name=self.dns_name
+        )
+        print("zone received:", zone)
+        # We need to make an API call to actually check its existence.
+        exists = zone.exists()
+        print(f"zone {zone} exists:", exists)
+        return exists, zone
+
+
+
 
     def delete_dns_record(self, record_name: str):
         """
         Löscht einen A-Record aus Cloud DNS.
-        :param record_name: Subdomain (z.B. 'sims' für sims.clusterexpress.com)
+        :param record_name: Subdns_name (z.B. 'sims' für sims.clusterexpress.com)
         """
-        zone = self.dns_client.zone(self.dns_zone)
-        fqdn = f"{record_name}.{self.domain}"
+        zone = self.check_create_zone()
+        fqdn = f"{record_name}.{self.dns_name}"
+
 
         records = list(zone.list_resource_record_sets())
         target_record = None
@@ -145,16 +217,3 @@ class DNSManager:
         changes.delete_record_set(target_record)
         changes.create()
         print(f"🗑️ DNS record gelöscht: {fqdn}")
-# Example usage:
-if __name__ == "__main__":
-    manager = DNSManager(
-        project_id="aixr-401704",
-        region="us-central1",
-        domain="clusterexpress.com",
-        dns_zone="clusterexpress-zone"  # The DNS zone you created in Cloud DNS
-    )
-
-    ip = manager.reserve_static_ip("my-ingress-ip")
-    print("Reserved IP:", ip)
-
-    manager.create_dns_record("sims", ip)

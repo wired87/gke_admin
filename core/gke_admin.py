@@ -1,9 +1,14 @@
+"""
+# GET INGRESS
+kubectl get service ingress-nginx-controller -n ingress-nginx
+"""
+
 import os
+import time
 from tempfile import TemporaryDirectory
 
 from artifact_registry.artifact_admin import ArtifactAdmin
 from bm.settings import TEST_USER_ID
-from fb_core.real_time_database import FirebaseRTDBManager
 from gke_admin.cluster_admin import ClusterManager
 from gke_admin.connector import Connector
 from gke_admin.core.build_admin import GKEBuildAdmin
@@ -25,7 +30,7 @@ class GKEAdmin:
             self,
             user_id,
             gcp_project_id,
-            cluster_domain,
+            domain,
             cluster_subdomain,
             cluster_name,
             cluster_port,
@@ -37,13 +42,16 @@ class GKEAdmin:
         # ARGS
         self.repo = repo
         self.project_id = gcp_project_id
-        self.cluster_domain = cluster_domain
+        self.domain = domain
         self.cluster_subdomain = cluster_subdomain
         self.cluster_port = int(cluster_port)
         self.app_name = app_name
         self.cfg = cfg
         self.region = 'us-central1'
+
         self.cluster_name = cluster_name
+        self.cluster_domain = f"{cluster_subdomain}.{domain}"
+        print("CLUSTER DOMAIN:", self.cluster_domain)
 
         self.user_id=user_id
 
@@ -58,6 +66,7 @@ class GKEAdmin:
 
 
         self.artifact_admin = ArtifactAdmin()
+
         self.gke_utils = GKEUtils(
             self.client,
             self.core,
@@ -75,16 +84,14 @@ class GKEAdmin:
             project_id=gcp_project_id
         )
 
-        self.destroyer = GKEDestroyer(
-            self.gke_utils
-        )
+        self.destroyer = GKEDestroyer()
 
         self.ip_manager = DNSManager(
-            gcp_project_id,
-            self.region,
-            cluster_domain,
-            dns_zone=f"{cluster_domain.split('.')[0]}-zone"
+            project_id=gcp_project_id,
+            region=self.region,
+            dns_name=self.cluster_domain,
         )
+
         self.ingress_ctlr_manager = IngressControllerManager(
             self.client,
             self.core,
@@ -99,18 +106,14 @@ class GKEAdmin:
         self.builder = GKEBuildAdmin(
             self.core,
             self.project_id,
-            self.cluster_domain,
             self.cluster_port,
-            self.cluster_subdomain
         )
 
         self.connector = Connector(
             self.user_id,
             self.project_id,
             self.cluster_domain,
-            self.cluster_name,
             self.cluster_port,
-            self.cluster_subdomain,
         )
 
         self.file_store = TemporaryDirectory()
@@ -125,16 +128,18 @@ class GKEAdmin:
 
     def deploy(
             self,
-            deployment_struct, # app_name:cfg
+            deployment_struct,  # app_name:cfg
     ):
+        print("deploy:", deployment_struct)
+
         # Make deployment available to the web
         self.create_connect_infrastructure()
 
         # Create DEPL & INGRESS-RULE CFG
-        resource_struct:dict = self.gke_utils.create_resource_cfgs(deployment_struct)
+        resource_sruct:dict = self.gke_utils.create_resource_cfgs(deployment_struct)
 
         resource_paths: list[str] = self.gke_utils.write_resource_cfgs_to_file_store(
-            resource_struct,
+            resource_sruct,
             file_store_name=self.file_store.name
         )
 
@@ -142,9 +147,10 @@ class GKEAdmin:
         self.create_resources(resource_paths)
 
         # Await resirces alive
-        self.gke_utils.await_pod_state(
+        active_pods = self.gke_utils.await_pod_state(
             list(deployment_struct.keys())
         )
+        return active_pods
 
 
 
@@ -153,7 +159,7 @@ class GKEAdmin:
         # CHECK CREATE CLUSTER
         self.cluster_manager.check_cluster_exists()
 
-        # CONTROLLER
+        # CONTROLLER (creates its own laodbalancer
         self.ingress_ctlr_manager.check_create_ingress_ctrl()
 
         # Certificate
@@ -161,7 +167,8 @@ class GKEAdmin:
 
         # LoadBalancer
         self.create_service_process(
-            app_name="load-balancer",
+            app_name="ingress-nginx-controller",
+            namespace="ingress-nginx",
             service_type="LoadBalancer",
         )
 
@@ -172,30 +179,58 @@ class GKEAdmin:
     ) -> list:
         """Apply Saved files"""
         for path in paths:
-            print("Deploy File", path)
+            f_name = path.split('/')[-1].split("\\")[-1]
+            print("Deploy File", f_name)
             try:
                 self.builder.create_resource_from_yaml(
                     file_path=path
                 )
                 print(f"Created resource from: {path}")
             except Exception as e:
-                print(f"Error creating resource from path {path}: {e}")
+                print(f"Error creating resource from path {f_name}: {e}")
         print("All Resources successfully created -> fielstor cleared")
 
 
 
-    def create_service_process(self, app_name, service_type="LoadBalancer"):
+    def create_service_process(self, app_name, namespace="default", service_type="LoadBalancer"):
         """
         create_service_process
         """
+        print("start create_service_process")
         path = os.path.join(self.file_store.name, f"{service_type}_{app_name}.yaml")
+        try:
+            service = self.gke_utils.check_service_exists(
+                service_name=app_name,
+                namespace=namespace
+            )
+            if service is None:
+                print(f"create service {service_type} ")
+                self.create_service(
+                    app_name,
+                    path,
+                    service_type
+                )
 
-        service = self.gke_utils.check_service_exists(
-            service_name=app_name)
-        if service is not None:
-            print(f"Service {service_type} already exists")
-            return
+            service_ip = self.await_service_ip(
+                app_name,
+                namespace
+            )
 
+            # Create DNS record
+            self.ip_manager.create_dns_record(
+                ip_address=service_ip
+            )
+        except Exception as e:
+            print(f"Err create_service_process: {e}")
+
+
+
+    def create_service(
+            self,
+            app_name,
+            path,
+            service_type
+    ):
         content = self.gke_utils.create_service_cfg(
             name=app_name,
         )
@@ -213,27 +248,47 @@ class GKEAdmin:
         self.file_store.cleanup()
         print("FileStore cleared")
 
-        service = self.gke_utils.check_service_exists(
+        service: dict or None = self.gke_utils.check_service_exists(
             service_name=app_name)
-        """
-        status:
-          loadBalancer:
-            ingress:
-              - ip: 34.41.41.191
-        """
-        service_ip = service["status"]["loadBalancer"]["ingress"][0]
-        if service_ip is None:
-            raise ValueError("No ip in service found")
-
-        # Create DNS record
-        self.ip_manager.create_dns_record(
-            record_name=f"{self.cluster_subdomain}-{self.cluster_domain.replace('.', '-')}",
-            ip_address=service_ip
-        )
+        return service
 
 
 
 
+
+    def await_service_ip(self, app_name, namespace):
+        # Start the polling loop
+        service_ip = None
+        retries = 10  # Maximum number of attempts
+        sleep_time = 5  # Seconds to wait between attempts
+
+        for i in range(retries):
+            print(f"Checking for LoadBalancer IP... Attempt {i + 1}/{retries}")
+            try:
+                service: dict or None = self.gke_utils.check_service_exists(
+                    service_name=app_name,
+                    namespace=namespace
+                )
+
+                status = service.get("status", {})
+                print("service status", status)
+
+                if service and status.get("load_balancer", {}).get("ingress"):
+                    service_ip = status["load_balancer"]["ingress"][0].get("ip")
+                    if service_ip:
+                        print(f"LoadBalancer IP found: {service_ip}")
+                        break
+                    time.sleep(sleep_time)
+
+            except Exception as e:
+                print(f"Err await_service_ip: {e}")
+
+            time.sleep(sleep_time)
+            if retries < i:
+                print("Couldnt get service ip")
+                break
+
+        return service_ip
 
 
 
@@ -242,7 +297,7 @@ if __name__ == "__main__":
     admin = GKEAdmin(
         user_id=TEST_USER_ID,
         gcp_project_id=os.environ["GCP_PROJECT_ID"],
-        cluster_domain=os.environ["CLUSTER_DOMAIN"],
+        domain=os.environ["CLUSTER_DOMAIN"],
         cluster_name=os.environ["GKE_SIM_CLUSTER_NAME"],
         cluster_port=os.environ["CLUSTER_PORT"],
         cluster_subdomain=os.environ["CLUSTER_SUB_DOMAIN"],

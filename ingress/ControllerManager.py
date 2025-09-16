@@ -36,29 +36,22 @@ class IngressControllerManager:
 
         # INGRESS CONTROLLER
         if controller_exists is False:
-            self.controller_creation_process()
-        print("Ingress already created ingress controlelr")
+            # CREATE CONTROLLER
+            self.create_ingress_controller()
 
+            # AWAIT ACTIVE
+            self.wait_for_external_ip()
 
-    def controller_creation_process(self):
-        print("Install ingress controlelr")
+            """# DELETE OLD INGRESS IP IF EXISTS
+                    self.ip_manager.delete_ip(
+                        name=self.namespace
+                    )
 
-        # CREATE CONTROLLER
-        self.create_ingress_controller()
-
-        # AWAIT ACTIVE
-        controller_ip = self.wait_for_external_ip()
-
-        # DELETE OLD INGRESS IP IF EXISTS
-        self.ip_manager.delete_ip(
-            name=self.namespace
-        )
-
-        # SAVE CTL IP
-        self.ip_manager.save_existing_ip(
-            ip=controller_ip,
-            ip_name=self.namespace,
-        )
+                    # SAVE CTL IP
+                    self.ip_manager.save_existing_ip(
+                        ip=controller_ip,
+                        ip_name=self.namespace,
+                    )"""
         print("Controller process finished")
 
 
@@ -118,6 +111,7 @@ class IngressControllerManager:
         :return: Externe IP oder None
         """
         start = time.time()
+        print("⏳ Warte auf externe IP...")
         while time.time() - start < timeout:
             svc = self.core.read_namespaced_service(service_name, self.namespace)
             if svc.status.load_balancer.ingress:
@@ -125,7 +119,6 @@ class IngressControllerManager:
                 if ip:
                     print(f"✅ Ingress-Service {service_name} ist aktiv mit IP: {ip}")
                     return ip
-            print("⏳ Warte auf externe IP...")
             time.sleep(5)
         print("❌ Timeout erreicht – keine externe IP vergeben.")
         return None
