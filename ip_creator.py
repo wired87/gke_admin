@@ -3,6 +3,13 @@ import subprocess
 from utils.run_subprocess import exec_cmd
 
 class DNSManager:
+
+    """
+    # todo enable CoreDNS stub domain or external-dns so the internal DNS resolution also points myapp.example.com → LoadBalancer IP. That way internal and external clients resolve the same host
+
+    """
+
+
     def __init__(
             self,
             project_id: str,
@@ -108,8 +115,8 @@ class DNSManager:
         :param ip_address: Static IP to point to
         :param ttl: Time-to-live (seconds)
         """
+        print("===============CREATE DNS RECORD=================")
         try:
-            print("start create_dns_record")
             zone = self.check_create_zone()
             if zone is None:
                 print(f"Zone {self.dns_name} is None")

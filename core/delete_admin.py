@@ -1,16 +1,12 @@
 from kubernetes import client, config
 
-# Konfiguriere den Kubernetes-Client
-# Dies lädt die Konfiguration aus ~/.kube/config
-# oder der Service-Account-Kontext in GKE-Clustern
-config.load_kube_config()
-
-
 class GKEDestroyer:
 
-    def __init__(self):
-        self.apps_v1 = client.AppsV1Api()
-        self.core_v1 = client.CoreV1Api()
+    def __init__(self, core, apps, secret_name):
+        self.apps = apps
+        self.core = core
+        self.api = client.NetworkingV1Api()
+        self.secret_name = secret_name
         self.namespace = [
             "default",
             "ingress-nginx"
@@ -22,19 +18,60 @@ class GKEDestroyer:
             self.delete_all_deployments(namespace=namespace)
             self.delete_all_services(namespace=namespace)
             self.delelte_pods(namespace=namespace)
+            self.delete_ingress(namespace)
+            self.delete_secret(secret_name=self.secret_name, namespace=namespace)
             print("Cleanup completed")
+
+    def delete_secret(
+            self,
+            secret_name: str,
+            namespace: str = "default"
+    ):
+        print("delete secret")
+        """
+        Löscht ein Secret im angegebenen Namespace.
+        Nutzt den Kubernetes Python Client (CoreV1Api).
+        """
+        try:
+            self.core.delete_namespaced_secret(
+                name=secret_name,
+                namespace=namespace
+            )
+            print(f"🗑️ Secret '{secret_name}' im Namespace '{namespace}' gelöscht.")
+        except Exception as e:
+            print(f"⚠️ Secret '{secret_name}' im Namespace '{namespace}' nicht gefunden: {e}")
+        
+    def delete_ingress(self, namespace):
+        try:
+            ingress_list = self.api.list_namespaced_ingress(namespace=namespace)
+            if not ingress_list.items:
+                print(f"✅ Keine Ingresses im Namespace '{namespace}' gefunden.")
+                return
+
+            for ingress in ingress_list.items:
+                name = ingress.metadata.name
+                try:
+                    self.api.delete_namespaced_ingress(name=name, namespace=namespace)
+                    print(f"🗑️  Ingress '{name}' deleted from -n '{namespace}'")
+                except Exception as e:
+                    print(f"⚠️ Fehler beim Löschen von Ingress '{name}': {e}")
+
+        except Exception as e:
+            print(f"❌ Fehler beim Auflisten von Ingresses: {e}")
+
+
 
     def delelte_pods(self, pod_names: list[str] = None, all=False, namespace="default"):
         try:
             if all:
-                pods = self.core_v1.list_namespaced_pod(namespace=namespace)
+                pods = self.core.list_namespaced_pod(namespace=namespace)
                 pod_names = [pod.metadata.name for pod in pods.items]
 
             if pod_names:
                 for pn in pod_names:
                     print(f"Working on pod: {pn}")
                     if pn.startswith("env"):
-                        self.core_v1.delete_namespaced_pod(name=pn, namespace="default")
+                        self.core.delete_namespaced_pod(name=pn, namespace="default")
                         print(f"Deleted: {pn}")
                     else:
                         print(f"Skipping pod {pn}")
@@ -50,20 +87,20 @@ class GKEDestroyer:
         print(f"Attempting to force delete service: {service_name}")
         try:
             # 1. Get the service object
-            svc = self.core_v1.read_namespaced_service(name=service_name, namespace=namespace)
+            svc = self.core.read_namespaced_service(name=service_name, namespace=namespace)
 
             # 2. Check for finalizers and remove them
             if svc.metadata.finalizers:
                 print(f"Removing finalizers from service {service_name}")
                 # Leere Finalizer-Liste, um sie zu entfernen
                 svc.metadata.finalizers = []
-                self.core_v1.patch_namespaced_service(name=service_name, namespace=namespace, body=svc)
+                self.core.patch_namespaced_service(name=service_name, namespace=namespace, body=svc)
                 print(f"Finalizers removed from service {service_name}.")
             else:
                 print(f"No finalizers found in {service_name}")
 
             # 3. Force delete the service
-            self.core_v1.delete_namespaced_service(
+            self.core.delete_namespaced_service(
                 name=service_name,
                 namespace=namespace,
                 grace_period_seconds=0,
@@ -82,7 +119,7 @@ class GKEDestroyer:
         Löscht alle Services im angegebenen Namespace (außer dem 'kubernetes'-Service).
         """
         try:
-            services = self.core_v1.list_namespaced_service(namespace=namespace)
+            services = self.core.list_namespaced_service(namespace=namespace)
             services_to_delete = [s.metadata.name for s in services.items if s.metadata.name != "kubernetes"]
 
             if not services_to_delete:
@@ -92,7 +129,7 @@ class GKEDestroyer:
             for svc in services_to_delete:
                 print(f"Deleting service '{svc}'...")
                 try:
-                    self.core_v1.delete_namespaced_service(name=svc, namespace=namespace)
+                    self.core.delete_namespaced_service(name=svc, namespace=namespace)
                     print(f"Service '{svc}' successfully initiated deletion.")
                 except client.ApiException as e:
                     if e.status == 409:  # Conflict status code
@@ -109,7 +146,7 @@ class GKEDestroyer:
         Löscht alle Deployments im angegebenen Namespace, inkl. aller Pods.
         """
         try:
-            deployments = self.apps_v1.list_namespaced_deployment(namespace=namespace)
+            deployments = self.apps.list_namespaced_deployment(namespace=namespace)
             if not deployments.items:
                 print(f"Keine Deployments im Namespace '{namespace}' gefunden.")
                 return
@@ -117,7 +154,7 @@ class GKEDestroyer:
             for dep in deployments.items:
                 name = dep.metadata.name
                 print(f"Deleting deployment '{name}'...")
-                self.apps_v1.delete_namespaced_deployment(name=name, namespace=namespace)
+                self.apps.delete_namespaced_deployment(name=name, namespace=namespace)
                 print(f"Deployment '{name}' deleted.")
         except client.ApiException as e:
             print(f"Error deleting deployments: {e}")

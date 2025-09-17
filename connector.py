@@ -45,7 +45,7 @@ class Connector:
         index = 0
 
         env_ids = [
-            env_id.replce("_", "-")
+            env_id.replace("_", "-")
             for env_id in env_ids
         ]
 

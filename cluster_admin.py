@@ -61,7 +61,7 @@ class ClusterManager:
 
 
     def check_cluster_exists(self, create=True):
-        # Check if the cluster exists
+        print("===============CLUSTER PROCESS=================")
         check_cmd = [
             "gcloud",
             "container",

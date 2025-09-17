@@ -18,6 +18,7 @@ from kubernetes import client, config
 
 from gke_admin.core.delete_admin import GKEDestroyer
 from gke_admin.core.gke_utils import GKEUtils
+from gke_admin.helper.secret_manager import SecretManager
 from gke_admin.ingress.ControllerManager import IngressControllerManager
 from gke_admin.ip_creator import DNSManager
 from utils.file._yaml import write_yaml
@@ -34,6 +35,8 @@ class GKEAdmin:
             cluster_subdomain,
             cluster_name,
             cluster_port,
+            namespace="default",
+            region='us-central1',
             app_name=None,
             repo="qfs-repo",
             image="qfs",
@@ -47,11 +50,12 @@ class GKEAdmin:
         self.cluster_port = int(cluster_port)
         self.app_name = app_name
         self.cfg = cfg
-        self.region = 'us-central1'
+        self.region = region
+        self.namespace = namespace
 
         self.cluster_name = cluster_name
         self.cluster_domain = f"{cluster_subdomain}.{domain}"
-        print("CLUSTER DOMAIN:", self.cluster_domain)
+        self.secret_name= f"{self.domain.replace('.','-')}"
 
         self.user_id=user_id
 
@@ -60,10 +64,12 @@ class GKEAdmin:
 
         # CLIENTS
         self.client = client.ApiClient()
+        self.apps = client.AppsV1Api()
         self.core = client.CoreV1Api(self.client)
+        self.batch = client.BatchV1Api()
+        self.adm = client.AdmissionregistrationV1Api()
         self.configuration = client.Configuration()
         self.configuration.debug = False
-
 
         self.artifact_admin = ArtifactAdmin()
 
@@ -75,6 +81,7 @@ class GKEAdmin:
             self.cluster_subdomain,
             self.cluster_domain,
             self.artifact_admin,
+            self.secret_name,
         )
 
         # CLASSES
@@ -84,7 +91,11 @@ class GKEAdmin:
             project_id=gcp_project_id
         )
 
-        self.destroyer = GKEDestroyer()
+        self.destroyer = GKEDestroyer(
+            self.core,
+            self.apps,
+            secret_name=self.secret_name,
+        )
 
         self.ip_manager = DNSManager(
             project_id=gcp_project_id,
@@ -95,8 +106,19 @@ class GKEAdmin:
         self.ingress_ctlr_manager = IngressControllerManager(
             self.client,
             self.core,
-            self.ip_manager
+            self.ip_manager,
+            self.apps,
+            self.batch,
+            self.adm,
         )
+
+        self.secret_manager = SecretManager(
+            self.core,
+            self.cluster_domain,
+            self.namespace,
+            self.secret_name
+        )
+
         self.relay_creator = ClusterRelayCreator(
             self.client,
             self.core,
@@ -138,18 +160,14 @@ class GKEAdmin:
         # Create DEPL & INGRESS-RULE CFG
         resource_sruct:dict = self.gke_utils.create_resource_cfgs(deployment_struct)
 
-        resource_paths: list[str] = self.gke_utils.write_resource_cfgs_to_file_store(
+        resource_paths: dict = self.gke_utils.write_resource_cfgs_to_file_store(
             resource_sruct,
             file_store_name=self.file_store.name
         )
 
         # CREATE INGRESS SERVICE AND DEPLOYMENT
-        self.create_resources(resource_paths)
+        active_pods = self.create_resources(resource_paths)
 
-        # Await resirces alive
-        active_pods = self.gke_utils.await_pod_state(
-            list(deployment_struct.keys())
-        )
         return active_pods
 
 
@@ -163,7 +181,7 @@ class GKEAdmin:
         self.ingress_ctlr_manager.check_create_ingress_ctrl()
 
         # Certificate
-        self.builder.build_managed_certificate()
+        self.secret_manager.check_create_secret()
 
         # LoadBalancer
         self.create_service_process(
@@ -175,27 +193,36 @@ class GKEAdmin:
 
     def create_resources(
             self,
-            paths:list[str]
+            path_struct:dict
     ) -> list:
         """Apply Saved files"""
-        for path in paths:
-            f_name = path.split('/')[-1].split("\\")[-1]
-            print("Deploy File", f_name)
-            try:
-                self.builder.create_resource_from_yaml(
-                    file_path=path
-                )
-                print(f"Created resource from: {path}")
-            except Exception as e:
-                print(f"Error creating resource from path {f_name}: {e}")
+        print("===============APPLY RESOURCES=================")
+        active_pods=[]
+        for app_name, struct in path_struct.items():
+            for rcs_type, path in struct.items():
+                f_name = path.split('/')[-1].split("\\")[-1]
+                print("Deploy File", f_name)
+                try:
+                    self.builder.create_resource_from_yaml(
+                        file_path=path
+                    )
+                    # AWAIT POD STATE ACTIVE
+                    if rcs_type == "deployment":
+                        pod_names:list = self.gke_utils.await_pod_state([app_name])
+                        active_pods.extend(pod_names)
+                    print(f"Created resource from: {path}")
+                except Exception as e:
+                    print(f"Error creating resource from path {f_name}: {e}")
         print("All Resources successfully created -> fielstor cleared")
-
+        return active_pods
 
 
     def create_service_process(self, app_name, namespace="default", service_type="LoadBalancer"):
         """
         create_service_process
         """
+        print("===============VALIDATE LOAD BALANCER=================")
+
         print("start create_service_process")
         path = os.path.join(self.file_store.name, f"{service_type}_{app_name}.yaml")
         try:
@@ -251,8 +278,6 @@ class GKEAdmin:
         service: dict or None = self.gke_utils.check_service_exists(
             service_name=app_name)
         return service
-
-
 
 
 

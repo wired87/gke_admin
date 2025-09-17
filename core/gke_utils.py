@@ -15,6 +15,7 @@ class GKEUtils:
             cluster_subdomain,
             cluster_domain,
             artifact_admin,
+            secret_name,
     ):
         self.client = client
         self.core = core
@@ -23,12 +24,7 @@ class GKEUtils:
         self.cluster_subdomain = cluster_subdomain
         self.cluster_domain = cluster_domain
         self.artifact_admin=artifact_admin
-
-
-
-
-
-
+        self.secret_name=secret_name
 
 
 
@@ -184,7 +180,7 @@ class GKEUtils:
         """
         Create an deployment and ingress rule cfg for all cfgs
         """
-        print("create_resource_cfgs", deployment_struct)
+        print("===============RESOURCE CREATION=================")
         cfg_struct = {}
         try:
             for app_name, struct in deployment_struct.items():
@@ -212,7 +208,7 @@ class GKEUtils:
             resource_cfg, # app_name: deployment:dict, ingress:dict
             file_store_name,
     ):
-        all_paths = []
+        path_struct = {}
         try:
             for app_name, struct in resource_cfg.items():
                 resources = list(struct.keys())
@@ -220,16 +216,16 @@ class GKEUtils:
                     # WRITE DEPLOYMENT
                     path = os.path.join(
                         file_store_name,
-                        f"{rcs}_{app_name}.yaml"
+                        f"{rcs}__{app_name}.yaml"
                     )
                     write_yaml(
                         content=struct[rcs],
                         dest=path
                     )
-                    all_paths.append(path)
+                    path_struct[app_name][rcs] = path
                     print(f"{rcs} written")
             print("Entire content written to file store>")
-            return all_paths
+            return path_struct
         except Exception as e:
             print(f"Err write_resource_cfgs_to_file_store: {e}")
 
@@ -242,18 +238,20 @@ class GKEUtils:
             self,
             app_name=None,
             load_balancer_ip=None,
-            #secret_name="clusterexpress-tls"
+
+            secret_name=None
     ):
         if app_name is None:
             app_name = self.app_name
 
+        if secret_name is None:
+            secret_name = self.secret_name
+
         cert = f"{self.cluster_domain.replace('.','-')}"
         annotations = {
             "nginx.ingress.kubernetes.io/rewrite-target": "/",
-            #"nginx.ingress.kubernetes.io/load-balancer-ip": load_balancer_ip,
             "nginx.ingress.kubernetes.io/proxy-body-size": "50m",
             "nginx.ingress.kubernetes.io/proxy-connect-timeout": "3000",
-            "nginx.ingress.kubernetes.io/managed-certificates": cert,
             "nginx.ingress.kubernetes.io/proxy-read-timeout": "3000",
             "nginx.ingress.kubernetes.io/proxy-send-timeout": "3000",
             "nginx.ingress.kubernetes.io/send-timeout": "3000",
@@ -275,9 +273,8 @@ class GKEUtils:
                         {
                             "hosts": [
                                 f"{self.cluster_domain}",
-                                f"www.{self.cluster_domain}"
                             ],
-                            #"secretName": secret_name
+                            "secretName": secret_name
 
                         }
                     ],
@@ -308,7 +305,7 @@ class GKEUtils:
         if path is None:
             path = f"/{name}"
         return {
-                "host": f"{self.cluster_subdomain}.{self.cluster_domain}",
+                "host": self.cluster_domain,
                 "http": {
                     "paths": [
                         {
@@ -332,9 +329,10 @@ class GKEUtils:
             namespace="default"
         )
         print(f"received {len(pod_list.items)} pods:")
-        for pod in pod_list.items:
+        """for pod in pod_list.items:
             name = pod.metadata.name
             print(name)
+        """
         return pod_list
 
 

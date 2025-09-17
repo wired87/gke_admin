@@ -387,78 +387,12 @@ class GKEBuildAdmin(
         print("All secrets created")
         return env_cfg
 
-    def generate_selfsigned_cert(
-            self,
-            key_file="privkey.pem",
-            cert_file="fullchain.pem",
-            days=365,
-            common_name="cluster.clusterexpress.com",
-            bits=4096
-    ):
-        """
-        Generates a self-signed TLS certificate using OpenSSL.
-        """
-        cmd = [
-            "openssl", "req",
-            "-x509",
-            "-newkey", f"rsa:{bits}",
-            "-keyout", key_file,
-            "-out", cert_file,
-            "-days", str(days),
-            "-nodes",
-            "-subj", f"/CN={common_name}"
-        ]
-        print("Executing:", " ".join(cmd))
-        exec_cmd(cmd)
-        print(f"✅ Self-signed certificate created: {cert_file}, key: {key_file}")
-
-    def secret_process(self):
-        try:
-            print("start secret_process")
-            self.generate_selfsigned_cert()
-            secret_name = self.create_tls_secret()
-            print("finished secret_process")
-            return secret_name
-        except Exception as e:
-            print(f"Err secret_process: {e}")
 
 
 
-    def create_tls_secret(
-            self,
-            secret_name="clusterexpress-tls",
-            namespace="default",
-            cert_file="fullchain.pem",
-            key_file="privkey.pem"
-    ):
-        """
-        Creates a TLS secret if it does not already exist.
-        """
-        # Check if secret exists
-        check_cmd = [
-            "kubectl", "get", "secret", secret_name,
-            "-n", namespace,
-            "-o", "name"
-        ]
-        try:
-            result = exec_cmd(check_cmd)
-            if result is not None:
-                print(f"✅ Secret '{secret_name}' already exists in namespace '{namespace}'.")
-                return
-        except subprocess.CalledProcessError:
-            print(f"ℹ️ Secret '{secret_name}' not found in namespace '{namespace}', creating...")
 
-        # Create the secret
-        create_cmd = [
-            "kubectl", "create", "secret", "tls", secret_name,
-            f"--cert={cert_file}",
-            f"--key={key_file}",
-            "-n", namespace
-        ]
-        print("Executing:", " ".join(create_cmd))
-        exec_cmd(create_cmd)
-        print(f"✅ Secret '{secret_name}' created successfully in namespace '{namespace}'.")
-        return secret_name
+
+
 
 
     def get_intern_pod_ips(self, pod_names: list) -> dict:
@@ -557,24 +491,3 @@ class GKEBuildAdmin(
             )
         print("Service created")
 
-
-
-
-
-
-"""
-
-# Services im ingress-nginx Namespace
-cmd_svc = ["kubectl", "get", "svc", "-n", "ingress-nginx", "-o", "jsonpath={.items[*].metadata.name}"]
-svc_result = exec_cmd(cmd_svc)
-if svc_result and svc_result:
-    result["services"] = svc_result.split()
-
-# Installiert, wenn Controller-Pod und Service existieren
-if any("ingress-nginx-controller" in s for s in result["services"]):
-    result["installed"] = True
-            cmd_pods = ["kubectl", "get", "pods", "-n", "ingress-nginx", "-o", "jsonpath={.items[*].status.phase}"]
-            pods_status = exec_cmd(cmd_pods)
-            if pods_status and pods_status:
-                result["pods"] = pods_status.split()
-"""
