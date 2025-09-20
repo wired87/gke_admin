@@ -1,7 +1,7 @@
 
 import time
 
-from gke_admin.ip_creator import DNSManager
+from gke_admin.dns_manager import DNSManager
 from utils.run_subprocess import exec_cmd
 
 
@@ -16,7 +16,6 @@ class IngressControllerManager:
             batch,
             adm,
             namespace="ingress-nginx",
-            kubeconfig_path=None,
     ):
         self.apps = apps
         self.core = core
@@ -27,14 +26,7 @@ class IngressControllerManager:
         self.ip_manager = ip_manager
         self.namespace = namespace
 
-        """if kubeconfig_path:
-            config.load_kube_config(config_file=kubeconfig_path)
-        else:
-            try:
-                config.load_incluster_config()
-            except:
-                config.load_kube_config()
-        """
+
 
     def check_create_ingress_ctrl(self):
         print("===============INGRESS CONTROLLER=================")
@@ -185,18 +177,16 @@ class IngressControllerManager:
             try:
                 endpoints = self.core.read_namespaced_endpoints(service_name, namespace)
                 print("endpoints", endpoints)
+
+                if not endpoints.subsets:
+                    return False
+
+                for subset in endpoints.subsets:
+                    if subset.addresses:
+                        print(f"Admission webhook ready at: {[a.ip for a in subset.addresses]}")
+                        return True
+                time.sleep(2)
             except Exception as e:
                 print(f"Error fetching endpoints: {e}")
-                return False
-
-            # loop through subsets and check addresses
-            if not endpoints.subsets:
-                return False
-
-            for subset in endpoints.subsets:
-                if subset.addresses:
-                    print(f"Admission webhook ready at: {[a.ip for a in subset.addresses]}")
-                    return True
-            time.sleep(2)
         return False
 

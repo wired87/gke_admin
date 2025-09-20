@@ -3,7 +3,6 @@ import subprocess
 import time
 from kubernetes import client, config
 
-from bm.settings import TEST_USER_ID
 from utils._kubernetes import MANAGED_CERTIFICATE_PATH
 from utils.file._yaml import write_yaml
 from utils.run_subprocess import exec_cmd
@@ -69,7 +68,6 @@ class GKEBuildAdmin(
                     target_port=self.cluster_port,
                 )
             print("Deployment process finished.Updated env_cfg.")
-            #pprint.pp(env_cfg)
 
         except Exception as e:
             print(f"Exception while create_deployments_process: {e}")
@@ -78,7 +76,6 @@ class GKEBuildAdmin(
             print("GKE create_deployments_process process finalized.")
 
         return env_cfg
-
 
 
     def create_resource_from_yaml(self, file_path: str):

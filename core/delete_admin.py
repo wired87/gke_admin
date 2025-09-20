@@ -1,16 +1,94 @@
-from kubernetes import client, config
+from kubernetes import client
 
 class GKEDestroyer:
 
-    def __init__(self, core, apps, secret_name):
+    def __init__(self, core, apps, batch, cert_name):
         self.apps = apps
         self.core = core
+        self.batch=batch
         self.api = client.NetworkingV1Api()
-        self.secret_name = secret_name
+        self.admin_reg_api = client.AdmissionregistrationV1Api()
+
+        self.cert_name = cert_name
         self.namespace = [
             "default",
-            "ingress-nginx"
+            "ingress-nginx",
+            "cert-manager"
         ]
+
+
+    def cleanup_completed_jobs(self, namespace: str = "default"):
+        """
+        Lists all completed Jobs in a given namespace and deletes them.
+
+        Args:
+            namespace: The namespace to clean up. Defaults to "default".
+        """
+        print(f"🕵️ Listing jobs in namespace '{namespace}'...")
+        try:
+            jobs = self.batch.list_namespaced_job(namespace=namespace)
+            print(f"Found {len(jobs.items)} jobs. 🧐")
+
+            deleted_count = 0
+            for job in jobs.items:
+                job_name = job.metadata.name
+                # Check if the job has completed successfully
+                if job.status.succeeded is not None and job.status.succeeded > 0:
+                    print(f"Found completed job: {job_name}. 🗑️ Deleting...")
+                    self.batch.delete_namespaced_job(
+                        name=job_name,
+                        namespace=namespace,
+                        body=client.V1DeleteOptions(propagation_policy="Background")
+                    )
+                    deleted_count += 1
+                else:
+                    print(f"Skipping job: {job_name}. Status: Not completed. 🚧")
+
+            print(f"✅ Cleanup complete. Deleted {deleted_count} completed jobs.")
+
+        except client.ApiException as e:
+            print(f"❌ An API error occurred: {e}")
+
+    # Example usage:
+    # cleanup_completed_jobs(namespace="ingress-nginx")
+
+
+
+
+
+
+    def delete_validating_webhook_configurations(
+            self,
+            name_contains: str = "nginx"
+    ):
+        """
+        Deletes ValidatingWebhookConfiguration resources whose names contain the specified string.
+
+        Args:
+            name_contains: The substring to search for in webhook names (e.g., "nginx").
+        """
+
+        try:
+            webhooks = self.admin_reg_api.list_validating_webhook_configuration()
+            print(f"Found {len(webhooks.items)} validating webhook configurations.")
+            found_match = False
+            for webhook in webhooks.items:
+                name = webhook.metadata.name
+                if name_contains in name:
+                    print(f"Found and deleting webhook: {webhook.metadata.name}")
+                    self.admin_reg_api.delete_validating_webhook_configuration(name=webhook.metadata.name)
+                    found_match = True
+
+            if not found_match:
+                print(f"No webhook configurations found with '{name_contains}' in the name.")
+
+        except client.ApiException as e:
+            print(f"An error occurred: {e}")
+
+    # Example usage:
+    # delete_validating_webhook_configurations(name_contains="nginx")
+
+
 
     def cleanup(self):
         for namespace in self.namespace:
@@ -19,12 +97,14 @@ class GKEDestroyer:
             self.delete_all_services(namespace=namespace)
             self.delelte_pods(namespace=namespace)
             self.delete_ingress(namespace)
-            self.delete_secret(secret_name=self.secret_name, namespace=namespace)
+            self.delete_secret(cert_name=self.cert_name, namespace=namespace)
+            self.delete_validating_webhook_configurations()
+            self.cleanup_completed_jobs()
             print("Cleanup completed")
 
     def delete_secret(
             self,
-            secret_name: str,
+            cert_name: str,
             namespace: str = "default"
     ):
         print("delete secret")
@@ -34,12 +114,12 @@ class GKEDestroyer:
         """
         try:
             self.core.delete_namespaced_secret(
-                name=secret_name,
+                name=cert_name,
                 namespace=namespace
             )
-            print(f"🗑️ Secret '{secret_name}' im Namespace '{namespace}' gelöscht.")
+            print(f"🗑️ Secret '{cert_name}' im Namespace '{namespace}' gelöscht.")
         except Exception as e:
-            print(f"⚠️ Secret '{secret_name}' im Namespace '{namespace}' nicht gefunden: {e}")
+            print(f"⚠️ Secret '{cert_name}' im Namespace '{namespace}' nicht gefunden: {e}")
         
     def delete_ingress(self, namespace):
         try:

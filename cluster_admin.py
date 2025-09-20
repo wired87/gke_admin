@@ -10,10 +10,12 @@ class ClusterManager:
     Manages the lifecycle of a GKE cluster.
     """
 
-    def __init__(self, cluster_name: str, region: str, project_id: str):
+    def __init__(
+            self, cluster_name: str, region: str, project_id: str, auto_cluster=True):
         self.cluster_name = cluster_name
         self.region = region
         self.project_id = project_id
+        self.auto_cluster = auto_cluster
 
     def __call__(self):
         """
@@ -83,11 +85,12 @@ class ClusterManager:
 
 
     def create_cluster(self):
+        create = "create-auto" if self.auto_cluster is True else "create"
         # Define the command to create the cluster
         create_cmd = [
             "gcloud", "container",
             "clusters",
-            "create-auto", self.cluster_name,
+            create, self.cluster_name,
             "--project", self.project_id,
             "--region", self.region,
             "--release-channel=regular",

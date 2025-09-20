@@ -1,6 +1,13 @@
+import os
+
 from google.cloud import dns
 import subprocess
 from utils.run_subprocess import exec_cmd
+
+from dotenv import load_dotenv
+load_dotenv()
+
+
 
 class DNSManager:
 
@@ -15,6 +22,7 @@ class DNSManager:
             project_id: str,
             region: str,
             dns_name: str,
+            zone_name:str,
     ):
         """
         :param project_id: GCP Project ID
@@ -24,33 +32,37 @@ class DNSManager:
         """
         self.project_id = project_id
         self.region = region
+        self.zone_name = zone_name
         self.dns_name = f"{dns_name}." # cluster.clusterexpress.com
-        self.zone_name = dns_name.replace(".", "-") # cluster.clusterexpress.com
         self.dns_client = dns.Client(project=project_id)
 
-    def reserve_static_ip(self, name: str) -> str:
-        """
-        Reserve a static external IP address in the given region.
-        :param name: Name for the reserved IP (e.g., 'my-ingress-ip')
-        :return: IP address as string
-        """
-        cmd = [
-            "gcloud", "compute", "addresses", "create", name,
-            "--region", self.region,
-            "--project", self.project_id
-        ]
-        subprocess.run(cmd, check=True)
 
-        # Fetch the reserved IP
-        cmd = [
-            "gcloud", "compute", "addresses", "describe", name,
-            "--region", self.region,
-            "--project", self.project_id,
-            "--format=value(address)"
-        ]
-        ip = subprocess.check_output(cmd).decode("utf-8").strip()
-        return ip
 
+
+
+    def delete_dns_zone(self, zone_name):
+        """
+        Delete a Cloud DNS managed zone including all its records.
+        WARNING: This is destructive and cannot be undone.
+        """
+        if zone_name is None:
+            zone_name = self.zone_name
+        zone = self.dns_client.zone(zone_name)
+
+        # Fetch and delete all record sets (except SOA and NS, deleted with the zone)
+        records = list(zone.list_resource_record_sets())
+        changes = zone.changes()
+        for record in records:
+            if record.record_type not in ("SOA", "NS"):
+                changes.delete_record_set(record)
+        if changes.additions or changes.deletions:
+            changes.create()
+            changes.reload()
+            print(f"✅ Deleted {len(changes.deletions)} records in zone {zone_name}")
+
+        # Finally, delete the zone itself
+        zone.delete()
+        print(f"🗑️ Zone '{zone_name}' deleted successfully (including all records).")
 
     def save_existing_ip(
             self,
@@ -68,46 +80,13 @@ class DNSManager:
         print(f"✅ IP {ip} wurde als statische Adresse {ip_name} reserviert.")
         return ip
 
-    def get_ip_by_name(self, name: str) -> str or None:
-        """
-        Holt eine reservierte IP anhand ihres Namens.
-        """
-        cmd = [
-            "gcloud", "compute", "addresses", "describe", name,
-            "--region", self.region,
-            "--project", self.project_id,
-            "--format=value(address)"
-        ]
-        try:
-            ip = subprocess.check_output(cmd).decode("utf-8").strip()
-            return ip if ip else None
-        except subprocess.CalledProcessError:
-            return None
 
-    def delete_ip(self, name: str):
-        """
-        Löscht eine reservierte IP anhand ihres Namens.
-        """
-        existing_ip: str or None = self.get_ip_by_name(name)
-        if existing_ip is None:
-            print(f"No Ip specified under {name}")
-            return
 
-        print(f"Deleting IP {name}")
-
-        cmd = [
-            "gcloud", "compute", "addresses", "delete", name,
-            "--region", self.region,
-            "--project", self.project_id,
-            "-q"  # skip confirmation
-        ]
-        exec_cmd(cmd)
-        print(f"🗑️ Statische IP {name} gelöscht.")
 
     def create_dns_record(
             self,
             ip_address: str,
-            ttl: int = 300
+            ttl: int = 30 # seconds dns gets cached locally
     ):
         """
         Create/replace an A record in Cloud DNS pointing to the reserved IP.
@@ -205,7 +184,13 @@ class DNSManager:
         Löscht einen A-Record aus Cloud DNS.
         :param record_name: Subdns_name (z.B. 'sims' für sims.clusterexpress.com)
         """
-        zone = self.check_create_zone()
+        zone = self.dns_client.zone(
+            name=self.zone_name,
+            dns_name=self.dns_name
+        )
+        if not zone:
+            print("No zone matched...")
+            return
         fqdn = f"{record_name}.{self.dns_name}"
 
 
@@ -224,3 +209,16 @@ class DNSManager:
         changes.delete_record_set(target_record)
         changes.create()
         print(f"🗑️ DNS record gelöscht: {fqdn}")
+
+
+
+if __name__ == "__main__":
+    domain=os.environ["CLUSTER_DOMAIN"]
+    cluster_subdomain = os.environ["CLUSTER_SUB_DOMAIN"]
+    admin = DNSManager(
+        project_id=os.environ["GCP_PROJECT_ID"],
+        region='us-central1',
+        dns_name=f"{cluster_subdomain}.{domain}",
+        zone_name=domain.replace('.', '-'),
+    )
+    admin.delete_dns_zone(f"{cluster_subdomain}.{domain}".replace(".", "-"))

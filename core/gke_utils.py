@@ -15,7 +15,12 @@ class GKEUtils:
             cluster_subdomain,
             cluster_domain,
             artifact_admin,
-            secret_name,
+            cert_name,
+            ingress_name,
+            backend_cfg_name,
+            file_store,
+            ingress_manager,
+            cloud="gcp"
     ):
         self.client = client
         self.core = core
@@ -24,8 +29,16 @@ class GKEUtils:
         self.cluster_subdomain = cluster_subdomain
         self.cluster_domain = cluster_domain
         self.artifact_admin=artifact_admin
-        self.secret_name=secret_name
+        self.cert_name=cert_name
+        self.cloud=cloud
+        self.backend_cfg_name=backend_cfg_name
+        self.ingress_name=ingress_name
+        self.ingress_manager=ingress_manager
+        self.file_store=file_store
 
+
+    def apply(self, path):
+        exec_cmd(["kubectl", "apply", "-f", path])
 
 
     def create_deployment_cfg(
@@ -59,10 +72,6 @@ class GKEUtils:
             pod_lines = result.split('\n')
             pod_names = [line.split()[0] for line in pod_lines if line]
             return pod_names
-
-
-
-
 
 
 
@@ -182,147 +191,151 @@ class GKEUtils:
         """
         print("===============RESOURCE CREATION=================")
         cfg_struct = {}
+        ingress_rules = []
         try:
             for app_name, struct in deployment_struct.items():
+                endpoint = f"/{app_name}"
                 app_name = app_name.replace('_', '-')
                 cfg_struct[app_name] = {}
                 cfg_struct[app_name]["deployment"] = self.create_deployment_cfg(
                     app_name,
-                    struct)
+                    struct
+                )
 
-                cfg_struct[app_name]["ingress"] = self.create_ingress_service_rule(
-                    app_name)
+
+                cfg_struct[app_name]["backend_cfg"] = self.deploy_backend_cfg(
+                    endpoint,
+                )
 
                 cfg_struct[app_name]["service"] = self.create_service_cfg(
                     name=app_name,
                     service_type="ClusterIP"
                 )
 
+                ingress_rules.append(
+                    self.create_ingress_rule(
+                        path=endpoint,
+                        name=app_name,
+                    ),
+                )
+                print(f"cfgs for {app_name} created")
+
+            # ADMIN INGRESS
+            cfg_struct[self.ingress_name] = {}
+            cfg_struct[self.ingress_name]["ingress"] = self.ingress_manager.get_extend_ingress(
+                name=self.ingress_name,
+                rules=ingress_rules
+            )
+
             print("Cfgs created and saved locally")
             return cfg_struct
         except Exception as e:
             print(f"Err create_resource_cfgs: {e}")
 
+
     def write_resource_cfgs_to_file_store(
             self,
-            resource_cfg, # app_name: deployment:dict, ingress:dict
+            resource_cfg,  # app_name: deployment:dict, ingress:dict
             file_store_name,
     ):
         path_struct = {}
         try:
             for app_name, struct in resource_cfg.items():
                 resources = list(struct.keys())
+                path_struct[app_name] = {}
                 for rcs in resources:
                     # WRITE DEPLOYMENT
-                    path = os.path.join(
+                    path = self.write_content(
                         file_store_name,
-                        f"{rcs}__{app_name}.yaml"
+                        rcs,
+                        app_name,
+                        struct[rcs],
                     )
-                    write_yaml(
-                        content=struct[rcs],
-                        dest=path
-                    )
-                    path_struct[app_name][rcs] = path
-                    print(f"{rcs} written")
+                    if path:
+                        path_struct[app_name][rcs] = path
+                        print(f"{rcs} written")
             print("Entire content written to file store>")
             return path_struct
         except Exception as e:
             print(f"Err write_resource_cfgs_to_file_store: {e}")
 
 
-
-
-
-
-    def create_ingress_service_rule(
+    def write_content(
             self,
-            app_name=None,
-            load_balancer_ip=None,
-
-            secret_name=None
+            file_store_name,
+            rcs,
+            app_name,
+            content
     ):
-        if app_name is None:
-            app_name = self.app_name
-
-        if secret_name is None:
-            secret_name = self.secret_name
-
-        cert = f"{self.cluster_domain.replace('.','-')}"
-        annotations = {
-            "nginx.ingress.kubernetes.io/rewrite-target": "/",
-            "nginx.ingress.kubernetes.io/proxy-body-size": "50m",
-            "nginx.ingress.kubernetes.io/proxy-connect-timeout": "3000",
-            "nginx.ingress.kubernetes.io/proxy-read-timeout": "3000",
-            "nginx.ingress.kubernetes.io/proxy-send-timeout": "3000",
-            "nginx.ingress.kubernetes.io/send-timeout": "3000",
-            "nginx.ingress.kubernetes.io/ssl-redirect": "true",
-        }
-
+        print("Write content to file store")
+        print("file_store_name",file_store_name)
+        print("rcs",rcs)
+        print("app_name",app_name)
+        print("content",content)
         try:
-            ingress_controller = {
-                **self.create_pod_metadata(
-                    api_version="networking.k8s.io/v1",
-                    name=f"ingress-{app_name}",
-                    labels={},
-                    resource_kind="Ingress",
-                    annotations=annotations
-                ),
-                "spec": {
-                    "ingressClassName": "nginx",
-                    "tls": [
-                        {
-                            "hosts": [
-                                f"{self.cluster_domain}",
-                            ],
-                            "secretName": secret_name
+            path = os.path.join(
+                file_store_name,
+                f"{rcs}__{app_name}.yaml"
+            )
+            print("path", path)
 
-                        }
-                    ],
-                    "rules": [
-                        self.create_ingress_rule(
-                            path=f"/{app_name}",
-                            name=app_name,
-                        ),
-                    ]
-                }
-            }
-            print("Ingress rule spec created")
-            return ingress_controller
+            write_yaml(
+                content=content,
+                dest=path
+            )
+            return path
         except Exception as e:
-            print(f"Err create_ingress_service_rule: {e}")
+            print(f"Err write_content: {e}")
+
+
+    def validate_ingress_class(self):
+        if self.cloud == "gcp":
+            return "gce"
+        else:
+            return "nginx"
+
+
+    def get_tls_spec(self):
+        if self.cloud not in ["gcp", "aws", "azure"]:
+            print("No TLS spec for non-cloud provider")
+            return {
+                "tls": [
+                    {
+                        "hosts": [
+                            self.cluster_domain,
+                        ],
+                        # "secretName": cert_name
+                    }
+                ]
+            }
+        return {}
 
 
 
 
-    def create_ingress_rule(
-            self,
-            name=None,
-            path=None,
-            path_type="Prefix"
-        ):
-        if name is None:
-            name = self.app_name
-        if path is None:
-            path = f"/{name}"
-        return {
-                "host": self.cluster_domain,
-                "http": {
-                    "paths": [
-                        {
-                            "path": path,
-                            "pathType": path_type,
-                            "backend": {
-                                "service": {
-                                    "name": name,
-                                    "port": {
-                                        "number": self.cluster_port
-                                    }
-                                }
-                            }
-                        }
-                    ]
+    def deploy_backend_cfg(self, endpoint):
+        backendconfig = {
+            "apiVersion": "cloud.google.com/v1",
+            "kind": "BackendConfig",
+            "metadata": {
+                "name": self.backend_cfg_name,
+                "namespace": "default"
+            },
+            "spec": {
+                "healthCheck": {
+                    "checkIntervalSec": 30,
+                    "timeoutSec": 10,
+                    "port": self.cluster_port,
+                    "type": "HTTP",
+                    "requestPath": endpoint
                 }
             }
+        }
+        print("Backend cfg created")
+        return backendconfig
+
+
+
 
     def get_pod_list(self):
         pod_list = self.core.list_namespaced_pod(
@@ -336,10 +349,7 @@ class GKEUtils:
         return pod_list
 
 
-
-
-
-    def await_pod_state(self, env_ids:list):
+    def await_pod_state(self, env_ids: list) -> list:
         """
         Waits in a loop until all pods in a given namespace are in the 'Running' state.
 
@@ -351,8 +361,9 @@ class GKEUtils:
             bool: True when all pods are running.
         """
         print(f"========== AWAIT RUNNING POD STATE ==========")
+        active_pods = []
+
         try:
-            active_pods = []
             converted_env_ids = [
                 env_id.replace("_", "-")
                 for env_id in env_ids
@@ -362,7 +373,6 @@ class GKEUtils:
             while len(converted_env_ids) > len(active_pods):
                 try:
                     print(f"Check iter: {i}")
-
                     i+=1
 
                     # List all pods in the specified namespace
@@ -381,14 +391,14 @@ class GKEUtils:
 
                     # Wait for a few seconds before checking again
                     time.sleep(2)
+
                 except Exception as e:
-                    print(f"An unexpected error occurred: {e}")
+                    print(f"Err intern await_pod_state: {e}")
             print("All created pods are Running")
-            return active_pods
 
         except Exception as e:
             print(f"Err await_resources_alive: {e}")
-
+        return active_pods
     def create_resources_spec(self, world_cfg):
         """
         Erstellt das Python-Wörterbuch für die Ressourcen-Definition

@@ -1,4 +1,6 @@
 import os
+import random
+import time
 
 from OpenSSL import crypto
 from kubernetes import client
@@ -9,6 +11,7 @@ class SecretManager:
     def __init__(
             self,
             core,
+            apps,
             cluster_domain,
             namespace=None,
             secret_name=None
@@ -18,9 +21,12 @@ class SecretManager:
         If kubeconfig is None, use in-cluster config (for Pods).
         """
         self.core = core
-        self.namespace=namespace
-        self.name=secret_name
+        self.namespace = namespace
+        self.name = secret_name
         self.cluster_domain = cluster_domain
+        self.san_list = [cluster_domain]
+        self.cfg_path =r"C:\Users\wired\OneDrive\Desktop\BestBrain\utils\san.cnf" if os.name == "nt" else "san.cnf"
+
 
         # Key paths
         self.out_dir = r"C:\Users\wired\OneDrive\Desktop\BestBrain\utils\_kubernetes\secrets" if os.name == "nt" else "utils/_kubernetes/secrets/"
@@ -28,6 +34,9 @@ class SecretManager:
 
         self.key_path = os.path.join(self.out_dir, "privkey.pem")
         self.cert_path = os.path.join(self.out_dir, "fullchain.pem")
+
+
+
 
     def check_create_secret(self, name=None, namespace=None):
         print("===============SECRET PROCESS=================")
@@ -40,80 +49,100 @@ class SecretManager:
                 print(f"Secret {self.name} already exists")
                 return
             print("start check_create_secret")
-            self.generate_selfsigned_cert()
+            crt_data, key_data = self.generate_self_signed_cert_with_san()
             secret_name = self.create_tls_secret(
                 name,
-                namespace)
+                namespace,
+                crt_data,
+                key_data
+            )
             print("finished secret_process")
             return secret_name
         except Exception as e:
             print(f"Err check_create_secret: {e}")
 
-    def generate_selfsigned_cert(
-            self,
-            bits=2048,
-            days=365,
-    ):
-        """
-        Generate a self-signed certificate + private key with pyOpenSSL,
-        and save them under out_dir.
-        """
-        # Create key pair
+    def generate_self_signed_cert_with_san(self, bits=2048, days=365):
         key = crypto.PKey()
         key.generate_key(crypto.TYPE_RSA, bits)
 
-        # Create self-signed certificate
         cert = crypto.X509()
-        cert.get_subject().CN = self.cluster_domain
-        cert.set_serial_number(1000)
+        cert.set_serial_number(int(time.time()) + random.randint(0, 100000))
         cert.gmtime_adj_notBefore(0)
         cert.gmtime_adj_notAfter(days * 24 * 60 * 60)
-        cert.set_issuer(cert.get_subject())
+
+        # Subject
+        subject = cert.get_subject()
+        subject.CN = self.san_list[0]  # erstes SAN als CN
+        subject.O = "MyOrg"
+        subject.C = "DE"
+
+        cert.set_issuer(subject)
         cert.set_pubkey(key)
+
+        # Extensions
+        san_string = ", ".join(f"DNS:{name}" for name in self.san_list)
+        extensions = [
+            crypto.X509Extension(b"basicConstraints", False, b"CA:FALSE"),
+            crypto.X509Extension(b"keyUsage", False, b"digitalSignature,keyEncipherment"),
+            crypto.X509Extension(b"extendedKeyUsage", False, b"serverAuth"),
+            crypto.X509Extension(b"subjectAltName", False, san_string.encode("utf-8")),
+        ]
+        cert.add_extensions(extensions)
+
         cert.sign(key, "sha256")
 
         with open(self.cert_path, "wt") as f:
-            f.write(crypto.dump_certificate(crypto.FILETYPE_PEM, cert).decode("utf-8"))
+            crt_data = crypto.dump_certificate(crypto.FILETYPE_PEM, cert).decode("utf-8")
+            f.write(crt_data)
 
         with open(self.key_path, "wt") as f:
-            f.write(crypto.dump_privatekey(crypto.FILETYPE_PEM, key).decode("utf-8"))
+            key_data = crypto.dump_privatekey(crypto.FILETYPE_PEM, key).decode("utf-8")
+            f.write(key_data)
 
         print(f"✅ Certificate saved at {self.cert_path}")
         print(f"✅ Key saved at {self.key_path}")
+        return crt_data, key_data
 
-    def create_tls_secret(self, name, namespace="default"):
+    # Example usage:
+    # generate_self_signed_cert_with_san("cert.pem", "key.pem", san_list=["cluster.clusterexpress.com", "localhost"])
+
+
+
+
+
+
+
+    def create_tls_secret(
+            self,
+            name,
+            namespace,
+            crt_data,
+            key_data
+    ):
         """
         Create or replace a TLS secret in the given namespace.
         """
-        with open(self.cert_path, "rb") as f:
-            crt_data = f.read()
-        with open(self.key_path, "rb") as f:
-            key_data = f.read()
-
         secret = client.V1Secret(
             api_version="v1",
             kind="Secret",
             metadata=client.V1ObjectMeta(
                 name=name,
-                namespace=namespace
+                #namespace=namespace
             ),
             type="kubernetes.io/tls",
-            string_data={   # string_data lets API do base64 internally
-                "tls.crt": crt_data.decode("utf-8"),
-                "tls.key": key_data.decode("utf-8")
+            string_data={
+                "tls.crt": crt_data,
+                "tls.key": key_data,
             }
         )
-
         try:
             self.core.create_namespaced_secret(
-                namespace, secret)
-            print(f"✅ Secret {name} created in {namespace}")
-        except ApiException as e:
-            if e.status == 409:
-                self.core.replace_namespaced_secret(name, namespace, secret)
-                print(f"♻️ Secret {name} replaced in {namespace}")
-            else:
-                raise
+                namespace,
+                secret
+            )
+            print(f"✅ Secret {name} created in -n {namespace}")
+        except Exception as e:
+            print(f"♻️ Secret {name} replaced in {namespace}: {e}")
 
     def get_secret(self, name, namespace):
         """
